@@ -1,19 +1,22 @@
-import { Vault, TFile, Notice } from "obsidian";
-import { Storage, Manifest, FileEntry } from "./storage";
+import { Vault, TFile } from "obsidian";
+import { Storage, Manifest } from "./storage";
+import { Logger } from "./logger";
 
 export class SyncEngine {
   private vault: Vault;
   private storage: Storage;
+  private log: Logger;
   private deviceId: string;
   private localManifest: Manifest;
   private pendingChanges: Set<string> = new Set();
   private debounceTimer: ReturnType<typeof setTimeout> | null = null;
   private syncing = false;
 
-  constructor(vault: Vault, storage: Storage, deviceId: string) {
+  constructor(vault: Vault, storage: Storage, deviceId: string, logger: Logger) {
     this.vault = vault;
     this.storage = storage;
     this.deviceId = deviceId;
+    this.log = logger;
     this.localManifest = {
       version: 1,
       deviceId,
@@ -23,24 +26,25 @@ export class SyncEngine {
   }
 
   async initialize(): Promise<void> {
-    new Notice("Thoth: initializing...", 3000);
+    this.log.notice("Thoth: initializing...");
     try {
       await this.buildLocalManifest();
       const remote = await this.storage.getManifest();
       const localCount = Object.keys(this.localManifest.files).length;
       const remoteCount = remote ? Object.keys(remote.files).length : 0;
 
-      new Notice(`Thoth: local=${localCount}, remote=${remoteCount}`, 5000);
-      console.log(`[thoth] init: local=${localCount} files, remote=${remoteCount} files`);
+      this.log.notice(`Thoth: local=${localCount}, remote=${remoteCount}`);
 
       if (localCount > 0 && remoteCount === 0) {
         await this.pushAll();
       } else if (remoteCount > 0) {
         await this.pull();
+      } else {
+        this.log.info("Nothing to sync — both local and remote are empty");
       }
     } catch (e: any) {
-      new Notice(`Thoth init failed: ${e.name}: ${e.message}`, 10000);
-      console.error("[thoth] init error:", e);
+      this.log.notice(`Thoth init failed: ${e.name}: ${e.message}`, 10000);
+      this.log.error("initialize() threw", e);
     }
   }
 
@@ -49,34 +53,36 @@ export class SyncEngine {
     const total = paths.length;
     let pushed = 0;
 
-    new Notice(`Thoth: initial push — ${total} files`);
-    console.log(`[thoth] pushAll: uploading ${total} files`);
+    this.log.notice(`Thoth: initial push — ${total} files`);
 
     for (const path of paths) {
       const file = this.vault.getAbstractFileByPath(path);
-      if (!(file instanceof TFile)) continue;
+      if (!(file instanceof TFile)) {
+        this.log.info(`pushAll: skipping ${path} — not a TFile`);
+        continue;
+      }
 
-      const content = await this.vault.readBinary(file);
-      await this.storage.putFile(path, content);
-      pushed++;
+      try {
+        const content = await this.vault.readBinary(file);
+        await this.storage.putFile(path, content);
+        pushed++;
 
-      if (pushed % 50 === 0) {
-        console.log(`[thoth] pushAll: ${pushed}/${total}`);
+        if (pushed % 50 === 0) {
+          this.log.info(`pushAll: ${pushed}/${total}`);
+        }
+      } catch (e: any) {
+        this.log.error(`pushAll: failed on ${path}`, e);
       }
     }
 
     this.localManifest.updatedAt = Date.now();
     await this.storage.putManifest(this.localManifest);
-    new Notice(`Thoth: initial push complete — ${pushed} files`);
-    console.log(`[thoth] pushAll: done, ${pushed} files uploaded`);
+    this.log.notice(`Thoth: initial push complete — ${pushed}/${total} files`);
   }
 
   private async buildLocalManifest(): Promise<void> {
     const files = this.vault.getFiles();
-    console.log(`[thoth] buildLocalManifest: vault.getFiles() returned ${files.length} files`);
-    if (files.length > 0) {
-      console.log(`[thoth] buildLocalManifest: first 3 paths:`, files.slice(0, 3).map(f => f.path));
-    }
+    this.log.info(`buildLocalManifest: vault.getFiles() returned ${files.length} files`);
 
     let skipped = 0;
     for (const file of files) {
@@ -90,7 +96,7 @@ export class SyncEngine {
         size: file.stat.size,
       };
     }
-    console.log(`[thoth] buildLocalManifest: indexed ${Object.keys(this.localManifest.files).length}, skipped ${skipped}`);
+    this.log.info(`buildLocalManifest: indexed ${Object.keys(this.localManifest.files).length}, skipped ${skipped}`);
   }
 
   private async hashFile(file: TFile): Promise<string> {
@@ -132,15 +138,18 @@ export class SyncEngine {
     if (this.syncing || this.pendingChanges.size === 0) return;
     this.syncing = true;
 
+    const changes = [...this.pendingChanges];
+    this.log.info(`push: ${changes.length} files queued`);
+
     try {
-      const changes = [...this.pendingChanges];
       this.pendingChanges.clear();
 
       for (const path of changes) {
         const entry = this.localManifest.files[path];
 
         if (entry?.deleted) {
-          await this.storage.deleteFile(`files/${path}`);
+          this.log.info(`push: deleting ${path}`);
+          await this.storage.deleteFile(path);
           continue;
         }
 
@@ -150,7 +159,8 @@ export class SyncEngine {
         const content = await this.vault.readBinary(file);
         const hash = await this.hashFile(file);
 
-        await this.storage.putFile(`files/${path}`, content);
+        this.log.info(`push: uploading ${path} (${content.byteLength} bytes)`);
+        await this.storage.putFile(path, content);
         this.localManifest.files[path] = {
           hash,
           mtime: file.stat.mtime,
@@ -161,9 +171,10 @@ export class SyncEngine {
       this.localManifest.updatedAt = Date.now();
       this.localManifest.deviceId = this.deviceId;
       await this.storage.putManifest(this.localManifest);
+      this.log.info(`push: done, manifest updated`);
     } catch (e: any) {
-      new Notice(`Thoth push failed: ${e.name}: ${e.message}`, 10000);
-      console.error("[thoth] push error:", e);
+      this.log.notice(`Thoth push failed: ${e.name}: ${e.message}`, 10000);
+      this.log.error("push() threw", e);
     } finally {
       this.syncing = false;
     }
@@ -171,25 +182,30 @@ export class SyncEngine {
 
   async pull(): Promise<void> {
     if (this.syncing) {
-      new Notice("Thoth: sync already in progress", 3000);
+      this.log.notice("Thoth: sync already in progress");
       return;
     }
     this.syncing = true;
-    new Notice("Thoth: pulling...", 2000);
+    this.log.info("pull: starting");
 
     try {
       const remote = await this.storage.getManifest();
       if (!remote) {
+        this.log.info("pull: no remote manifest, uploading local");
         await this.storage.putManifest(this.localManifest);
         return;
       }
 
+      this.log.info(`pull: remote deviceId=${remote.deviceId}, files=${Object.keys(remote.files).length}, updatedAt=${new Date(remote.updatedAt).toISOString()}`);
+
       if (remote.deviceId === this.deviceId && remote.updatedAt <= this.localManifest.updatedAt) {
+        this.log.info("pull: remote is same device and not newer, skipping");
         return;
       }
 
       let pulled = 0;
       let deleted = 0;
+      let conflicts = 0;
 
       for (const [path, entry] of Object.entries(remote.files)) {
         const local = this.localManifest.files[path];
@@ -198,6 +214,7 @@ export class SyncEngine {
           if (local && !local.deleted) {
             const file = this.vault.getAbstractFileByPath(path);
             if (file instanceof TFile) {
+              this.log.info(`pull: deleting ${path}`);
               await this.vault.delete(file);
               deleted++;
             }
@@ -209,17 +226,22 @@ export class SyncEngine {
         if (local && local.hash === entry.hash) continue;
 
         if (local && local.mtime > entry.mtime && local.hash !== entry.hash) {
-          // Local is newer — conflict, keep local, save remote as .conflict
-          const data = await this.storage.getFile(`files/${path}`);
+          this.log.info(`pull: conflict on ${path} — keeping local, saving remote as .conflict`);
+          const data = await this.storage.getFile(path);
           if (data) {
             const conflictPath = path.replace(/\.md$/, `.conflict-${remote.deviceId}.md`);
             await this.vault.createBinary(conflictPath, data);
+            conflicts++;
           }
           continue;
         }
 
-        const data = await this.storage.getFile(`files/${path}`);
-        if (!data) continue;
+        this.log.info(`pull: downloading ${path}`);
+        const data = await this.storage.getFile(path);
+        if (!data) {
+          this.log.info(`pull: ${path} — remote returned null, skipping`);
+          continue;
+        }
 
         const existing = this.vault.getAbstractFileByPath(path);
         if (existing instanceof TFile) {
@@ -232,21 +254,12 @@ export class SyncEngine {
         pulled++;
       }
 
-      // Handle files deleted remotely that we still have
-      for (const [path, local] of Object.entries(this.localManifest.files)) {
-        if (!remote.files[path] && !local.deleted) {
-          // File exists locally but not in remote manifest — it's new locally, push it
-        }
-      }
-
       this.localManifest.updatedAt = Date.now();
 
-      if (pulled > 0 || deleted > 0) {
-        new Notice(`Thoth: pulled ${pulled} files, deleted ${deleted}`);
-      }
+      this.log.notice(`Thoth: pulled ${pulled}, deleted ${deleted}, conflicts ${conflicts}`);
     } catch (e: any) {
-      new Notice(`Thoth pull failed: ${e.name}: ${e.message}`, 10000);
-      console.error("[thoth] pull error:", e);
+      this.log.notice(`Thoth pull failed: ${e.name}: ${e.message}`, 10000);
+      this.log.error("pull() threw", e);
     } finally {
       this.syncing = false;
     }

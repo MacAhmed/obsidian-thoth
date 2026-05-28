@@ -1,16 +1,19 @@
-import { Plugin, TFile, TAbstractFile, Notice } from "obsidian";
+import { Plugin, TFile, TAbstractFile } from "obsidian";
 import { Storage } from "./storage";
 import { SyncEngine } from "./sync";
 import { S3Backend } from "./backends";
+import { Logger } from "./logger";
 import { ThothSettings, ThothSettingTab, DEFAULT_SETTINGS } from "./settings";
 
 export default class ThothPlugin extends Plugin {
   settings: ThothSettings = DEFAULT_SETTINGS;
   private syncEngine: SyncEngine | null = null;
   private pollInterval: ReturnType<typeof setInterval> | null = null;
+  private logger!: Logger;
 
   async onload(): Promise<void> {
     await this.loadSettings();
+    this.logger = new Logger(this.app.vault);
     this.addSettingTab(new ThothSettingTab(this.app, this));
 
     this.addCommand({
@@ -42,6 +45,8 @@ export default class ThothPlugin extends Plugin {
   async startSync(): Promise<void> {
     this.stopSync();
 
+    this.logger.info(`startSync: endpoint=${this.settings.endpoint}, bucket=${this.settings.bucket}, deviceId=${this.settings.deviceId}`);
+
     const backend = new S3Backend({
       endpoint: this.settings.endpoint,
       region: this.settings.region,
@@ -54,7 +59,8 @@ export default class ThothPlugin extends Plugin {
     this.syncEngine = new SyncEngine(
       this.app.vault,
       storage,
-      this.settings.deviceId
+      this.settings.deviceId,
+      this.logger
     );
 
     await this.syncEngine.initialize();
@@ -88,7 +94,7 @@ export default class ThothPlugin extends Plugin {
       this.settings.pollInterval * 60 * 1000
     );
 
-    new Notice("Thoth: sync started");
+    this.logger.notice("Thoth: sync started");
   }
 
   private stopSync(): void {
@@ -101,6 +107,7 @@ export default class ThothPlugin extends Plugin {
 
   async testConnection(): Promise<{ ok: boolean; error?: string }> {
     if (!this.isConfigured()) return { ok: false, error: "Missing config" };
+    this.logger.info("testConnection: starting");
     const backend = new S3Backend({
       endpoint: this.settings.endpoint,
       region: this.settings.region,
@@ -109,7 +116,9 @@ export default class ThothPlugin extends Plugin {
       bucket: this.settings.bucket,
     });
     const storage = new Storage(backend);
-    return storage.testConnection();
+    const result = await storage.testConnection();
+    this.logger.info(`testConnection: result=${JSON.stringify(result)}`);
+    return result;
   }
 
   async loadSettings(): Promise<void> {

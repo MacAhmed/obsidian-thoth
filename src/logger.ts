@@ -1,0 +1,75 @@
+import { Vault, Notice } from "obsidian";
+
+const LOG_PATH = "_thoth-log.md";
+const MAX_LINES = 500;
+
+export class Logger {
+  private vault: Vault;
+  private buffer: string[] = [];
+  private flushTimer: ReturnType<typeof setTimeout> | null = null;
+
+  constructor(vault: Vault) {
+    this.vault = vault;
+  }
+
+  info(msg: string): void {
+    this.write("INFO", msg);
+    console.log(`[thoth] ${msg}`);
+  }
+
+  error(msg: string, err?: any): void {
+    this.write("ERROR", msg);
+    if (err) {
+      this.write("ERROR", `  name=${err.name} message=${err.message}`);
+      if (err.$metadata) this.write("ERROR", `  metadata=${JSON.stringify(err.$metadata)}`);
+    }
+    console.error(`[thoth] ${msg}`, err);
+  }
+
+  notice(msg: string, duration = 5000): void {
+    new Notice(msg, duration);
+    this.info(msg);
+  }
+
+  private write(level: string, msg: string): void {
+    const ts = new Date().toISOString().replace("T", " ").slice(0, 19);
+    this.buffer.push(`${ts} [${level}] ${msg}`);
+    this.scheduleFlush();
+  }
+
+  private scheduleFlush(): void {
+    if (this.flushTimer) return;
+    this.flushTimer = setTimeout(() => this.flush(), 1000);
+  }
+
+  private async flush(): Promise<void> {
+    this.flushTimer = null;
+    if (this.buffer.length === 0) return;
+
+    const newLines = this.buffer.splice(0);
+
+    try {
+      const file = this.vault.getAbstractFileByPath(LOG_PATH);
+      let content = "";
+
+      if (file) {
+        content = await this.vault.read(file as any);
+      }
+
+      content = content + newLines.join("\n") + "\n";
+
+      const lines = content.split("\n");
+      if (lines.length > MAX_LINES) {
+        content = lines.slice(-MAX_LINES).join("\n");
+      }
+
+      if (file) {
+        await this.vault.modify(file as any, content);
+      } else {
+        await this.vault.create(LOG_PATH, content);
+      }
+    } catch (e) {
+      console.error("[thoth] logger flush failed:", e);
+    }
+  }
+}
