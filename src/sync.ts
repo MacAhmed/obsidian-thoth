@@ -23,17 +23,24 @@ export class SyncEngine {
   }
 
   async initialize(): Promise<void> {
-    await this.buildLocalManifest();
-    const remote = await this.storage.getManifest();
-    const localCount = Object.keys(this.localManifest.files).length;
-    const remoteCount = remote ? Object.keys(remote.files).length : 0;
+    new Notice("Thoth: initializing...", 3000);
+    try {
+      await this.buildLocalManifest();
+      const remote = await this.storage.getManifest();
+      const localCount = Object.keys(this.localManifest.files).length;
+      const remoteCount = remote ? Object.keys(remote.files).length : 0;
 
-    console.log(`[thoth] init: local=${localCount} files, remote=${remoteCount} files`);
+      new Notice(`Thoth: local=${localCount}, remote=${remoteCount}`, 5000);
+      console.log(`[thoth] init: local=${localCount} files, remote=${remoteCount} files`);
 
-    if (localCount > 0 && remoteCount === 0) {
-      await this.pushAll();
-    } else if (remoteCount > 0) {
-      await this.pull();
+      if (localCount > 0 && remoteCount === 0) {
+        await this.pushAll();
+      } else if (remoteCount > 0) {
+        await this.pull();
+      }
+    } catch (e: any) {
+      new Notice(`Thoth init failed: ${e.name}: ${e.message}`, 10000);
+      console.error("[thoth] init error:", e);
     }
   }
 
@@ -163,8 +170,12 @@ export class SyncEngine {
   }
 
   async pull(): Promise<void> {
-    if (this.syncing) return;
+    if (this.syncing) {
+      new Notice("Thoth: sync already in progress", 3000);
+      return;
+    }
     this.syncing = true;
+    new Notice("Thoth: pulling...", 2000);
 
     try {
       const remote = await this.storage.getManifest();
