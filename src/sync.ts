@@ -155,7 +155,7 @@ export class SyncEngine {
       this.localManifest.deviceId = this.deviceId;
       await this.storage.putManifest(this.localManifest);
     } catch (e: any) {
-      new Notice(`Thoth: push failed — ${e.message}`);
+      new Notice(`Thoth push failed: ${e.name}: ${e.message}`, 10000);
       console.error("[thoth] push error:", e);
     } finally {
       this.syncing = false;
@@ -234,7 +234,7 @@ export class SyncEngine {
         new Notice(`Thoth: pulled ${pulled} files, deleted ${deleted}`);
       }
     } catch (e: any) {
-      new Notice(`Thoth: pull failed — ${e.message}`);
+      new Notice(`Thoth pull failed: ${e.name}: ${e.message}`, 10000);
       console.error("[thoth] pull error:", e);
     } finally {
       this.syncing = false;
