@@ -7,6 +7,7 @@ on:
 jobs:
   release:
     runs-on: ubuntu-latest
+    if: "!startsWith(github.event.head_commit.message, '[skip ci]')"
     permissions:
       contents: write
     steps:
@@ -17,16 +18,36 @@ jobs:
           node-version: 20
 
       - run: npm ci
+
+      - name: Bump patch version
+        run: |
+          node -e "
+          const fs = require('fs');
+          const m = JSON.parse(fs.readFileSync('manifest.json'));
+          const p = JSON.parse(fs.readFileSync('package.json'));
+          const parts = m.version.split('.');
+          parts[2] = parseInt(parts[2]) + 1;
+          const v = parts.join('.');
+          m.version = v;
+          p.version = v;
+          fs.writeFileSync('manifest.json', JSON.stringify(m, null, 2) + '\n');
+          fs.writeFileSync('package.json', JSON.stringify(p, null, 2) + '\n');
+          console.log('Bumped to ' + v);
+          "
+
       - run: npm run build
 
       - name: Get version
         id: version
         run: echo "version=$(node -p "require('./manifest.json').version")" >> $GITHUB_OUTPUT
 
-      - name: Delete existing release
-        run: gh release delete ${{ steps.version.outputs.version }} --yes 2>/dev/null || true
-        env:
-          GH_TOKEN: ${{ github.token }}
+      - name: Commit version bump
+        run: |
+          git config user.name "github-actions"
+          git config user.email "github-actions@github.com"
+          git add manifest.json package.json main.js
+          git commit -m "[skip ci] release ${{ steps.version.outputs.version }}"
+          git push
 
       - name: Create release
         run: gh release create ${{ steps.version.outputs.version }} main.js manifest.json --title "${{ steps.version.outputs.version }}" --notes "Auto-release from commit ${{ github.sha }}"
