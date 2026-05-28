@@ -211,52 +211,78 @@ export class SyncEngine {
       let pulled = 0;
       let deleted = 0;
       let conflicts = 0;
+      const CONCURRENCY = 20;
+
+      // Separate into deletes and downloads
+      const toDelete: [string, typeof remote.files[string]][] = [];
+      const toDownload: [string, typeof remote.files[string]][] = [];
 
       for (const [path, entry] of Object.entries(remote.files)) {
         const local = this.localManifest.files[path];
 
         if (entry.deleted) {
-          if (local && !local.deleted) {
-            const file = this.vault.getAbstractFileByPath(path);
-            if (file instanceof TFile) {
-              this.log.info(`pull: deleting ${path}`);
-              await this.vault.delete(file);
-              deleted++;
-            }
-            this.localManifest.files[path] = entry;
-          }
+          if (local && !local.deleted) toDelete.push([path, entry]);
           continue;
         }
-
         if (local && local.hash === entry.hash) continue;
-
         if (local && local.mtime > entry.mtime && local.hash !== entry.hash) {
-          this.log.info(`pull: conflict on ${path} — keeping local, saving remote as .conflict`);
-          const data = await this.storage.getFile(path);
-          if (data) {
+          toDownload.push([path, { ...entry, _conflict: true } as any]);
+          continue;
+        }
+        toDownload.push([path, entry]);
+      }
+
+      this.log.info(`pull: ${toDelete.length} to delete, ${toDownload.length} to download`);
+
+      // Process deletes sequentially (fast, vault ops)
+      for (const [path, entry] of toDelete) {
+        const file = this.vault.getAbstractFileByPath(path);
+        if (file instanceof TFile) {
+          await this.vault.delete(file);
+          deleted++;
+        }
+        this.localManifest.files[path] = entry;
+      }
+
+      // Download in parallel batches
+      for (let i = 0; i < toDownload.length; i += CONCURRENCY) {
+        const batch = toDownload.slice(i, i + CONCURRENCY);
+        const results = await Promise.all(
+          batch.map(async ([path, entry]) => {
+            try {
+              const data = await this.storage.getFile(path);
+              return { path, entry, data };
+            } catch (e: any) {
+              this.log.error(`pull: download failed for ${path}`, e);
+              return { path, entry, data: null };
+            }
+          })
+        );
+
+        // Apply to vault sequentially (vault ops aren't safe to parallelize)
+        for (const { path, entry, data } of results) {
+          if (!data) continue;
+
+          if ((entry as any)._conflict) {
             const conflictPath = path.replace(/\.md$/, `.conflict-${remote.deviceId}.md`);
             await this.vault.createBinary(conflictPath, data);
             conflicts++;
+            continue;
           }
-          continue;
+
+          const existing = this.vault.getAbstractFileByPath(path);
+          if (existing instanceof TFile) {
+            await this.vault.modifyBinary(existing, data);
+          } else {
+            await this.vault.createBinary(path, data);
+          }
+          this.localManifest.files[path] = entry;
+          pulled++;
         }
 
-        this.log.info(`pull: downloading ${path}`);
-        const data = await this.storage.getFile(path);
-        if (!data) {
-          this.log.info(`pull: ${path} — remote returned null, skipping`);
-          continue;
+        if ((i + CONCURRENCY) % 100 < CONCURRENCY) {
+          this.log.info(`pull: ${pulled}/${toDownload.length} downloaded`);
         }
-
-        const existing = this.vault.getAbstractFileByPath(path);
-        if (existing instanceof TFile) {
-          await this.vault.modifyBinary(existing, data);
-        } else {
-          await this.vault.createBinary(path, data);
-        }
-
-        this.localManifest.files[path] = entry;
-        pulled++;
       }
 
       this.localManifest.updatedAt = Date.now();
