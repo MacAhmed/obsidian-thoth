@@ -114,13 +114,13 @@ export class SyncEngine {
   }
 
   onFileChange(path: string): void {
-    if (path.startsWith(".") || path.startsWith("_thoth")) return;
+    if (path.startsWith(".") || path.startsWith("_thoth") || path === "_thoth-log.md") return;
     this.pendingChanges.add(path);
     this.schedulePush();
   }
 
   onFileDelete(path: string): void {
-    if (path.startsWith(".") || path.startsWith("_thoth")) return;
+    if (path.startsWith(".") || path.startsWith("_thoth") || path === "_thoth-log.md") return;
     if (this.localManifest.files[path]) {
       this.localManifest.files[path].deleted = true;
       this.localManifest.files[path].mtime = Date.now();
@@ -203,8 +203,11 @@ export class SyncEngine {
 
       this.log.info(`pull: remote deviceId=${remote.deviceId}, files=${Object.keys(remote.files).length}, updatedAt=${new Date(remote.updatedAt).toISOString()}`);
 
-      if (remote.deviceId === this.deviceId && remote.updatedAt <= this.localManifest.updatedAt) {
-        this.log.info("pull: remote is same device and not newer, skipping");
+      const remoteFileCount = Object.keys(remote.files).length;
+      const localFileCount = Object.keys(this.localManifest.files).length;
+
+      if (remote.deviceId === this.deviceId && remote.updatedAt <= this.localManifest.updatedAt && remoteFileCount <= localFileCount) {
+        this.log.info("pull: remote is same device, not newer, and no more files — skipping");
         return;
       }
 
