@@ -52,32 +52,37 @@ export class SyncEngine {
     const paths = Object.keys(this.localManifest.files);
     const total = paths.length;
     let pushed = 0;
+    let failed = 0;
+    const CONCURRENCY = 20;
 
-    this.log.notice(`Thoth: initial push — ${total} files`);
+    this.log.notice(`Thoth: initial push — ${total} files (${CONCURRENCY} parallel)`);
 
-    for (const path of paths) {
-      const file = this.vault.getAbstractFileByPath(path);
-      if (!(file instanceof TFile)) {
-        this.log.info(`pushAll: skipping ${path} — not a TFile`);
-        continue;
-      }
+    for (let i = 0; i < paths.length; i += CONCURRENCY) {
+      const batch = paths.slice(i, i + CONCURRENCY);
+      const promises = batch.map(async (path) => {
+        const file = this.vault.getAbstractFileByPath(path);
+        if (!(file instanceof TFile)) return;
 
-      try {
-        const content = await this.vault.readBinary(file);
-        await this.storage.putFile(path, content);
-        pushed++;
-
-        if (pushed % 50 === 0) {
-          this.log.info(`pushAll: ${pushed}/${total}`);
+        try {
+          const content = await this.vault.readBinary(file);
+          await this.storage.putFile(path, content);
+          pushed++;
+        } catch (e: any) {
+          failed++;
+          this.log.error(`pushAll: failed on ${path}`, e);
         }
-      } catch (e: any) {
-        this.log.error(`pushAll: failed on ${path}`, e);
+      });
+
+      await Promise.all(promises);
+
+      if ((i + CONCURRENCY) % 100 < CONCURRENCY) {
+        this.log.info(`pushAll: ${pushed}/${total} (${failed} failed)`);
       }
     }
 
     this.localManifest.updatedAt = Date.now();
     await this.storage.putManifest(this.localManifest);
-    this.log.notice(`Thoth: initial push complete — ${pushed}/${total} files`);
+    this.log.notice(`Thoth: initial push complete — ${pushed}/${total} files (${failed} failed)`);
   }
 
   private async buildLocalManifest(): Promise<void> {
