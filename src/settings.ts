@@ -1,4 +1,5 @@
-import { App, PluginSettingTab, Setting } from "obsidian";
+import { App, Modal, PluginSettingTab, Setting, Notice } from "obsidian";
+import QRCode from "qrcode-generator";
 import type ThothPlugin from "./main";
 
 export interface ThothSettings {
@@ -117,5 +118,137 @@ export class ThothSettingTab extends PluginSettingTab {
           setTimeout(() => btn.setButtonText("Test"), 5000);
         })
       );
+
+    containerEl.createEl("h3", { text: "Transfer settings" });
+
+    new Setting(containerEl)
+      .setName("Export as QR code")
+      .setDesc("Show a QR code to scan on another device")
+      .addButton((btn) =>
+        btn.setButtonText("Show QR").onClick(() => {
+          new QRModal(this.app, this.plugin.settings).open();
+        })
+      );
+
+    new Setting(containerEl)
+      .setName("Import from text")
+      .setDesc("Paste a settings string exported from another device")
+      .addButton((btn) =>
+        btn.setButtonText("Import").onClick(() => {
+          new ImportModal(this.app, this.plugin).open();
+        })
+      );
+
+    new Setting(containerEl)
+      .setName("Copy settings string")
+      .setDesc("Copy encoded settings to clipboard for manual transfer")
+      .addButton((btn) =>
+        btn.setButtonText("Copy").onClick(async () => {
+          const encoded = encodeSettings(this.plugin.settings);
+          await navigator.clipboard.writeText(encoded);
+          new Notice("Settings copied to clipboard");
+        })
+      );
+  }
+}
+
+function encodeSettings(settings: ThothSettings): string {
+  const payload = {
+    e: settings.endpoint,
+    r: settings.region,
+    a: settings.accessKey,
+    s: settings.secretKey,
+    b: settings.bucket,
+    p: settings.pollInterval,
+  };
+  return btoa(JSON.stringify(payload));
+}
+
+function decodeSettings(encoded: string): Partial<ThothSettings> | null {
+  try {
+    const payload = JSON.parse(atob(encoded.trim()));
+    return {
+      endpoint: payload.e,
+      region: payload.r,
+      accessKey: payload.a,
+      secretKey: payload.s,
+      bucket: payload.b,
+      pollInterval: payload.p,
+    };
+  } catch {
+    return null;
+  }
+}
+
+class QRModal extends Modal {
+  private settings: ThothSettings;
+
+  constructor(app: App, settings: ThothSettings) {
+    super(app);
+    this.settings = settings;
+  }
+
+  onOpen(): void {
+    const { contentEl } = this;
+    contentEl.empty();
+    contentEl.createEl("h2", { text: "Scan on your other device" });
+    contentEl.createEl("p", {
+      text: "Go to Thoth settings → Import from text → paste what you get from scanning this.",
+      cls: "setting-item-description",
+    });
+
+    const encoded = encodeSettings(this.settings);
+    const qr = QRCode(0, "M");
+    qr.addData(encoded);
+    qr.make();
+
+    const svg = qr.createSvgTag({ scalable: true });
+    const container = contentEl.createDiv({ cls: "thoth-qr-container" });
+    container.innerHTML = svg;
+    container.style.maxWidth = "300px";
+    container.style.margin = "1em auto";
+  }
+
+  onClose(): void {
+    this.contentEl.empty();
+  }
+}
+
+class ImportModal extends Modal {
+  private plugin: ThothPlugin;
+
+  constructor(app: App, plugin: ThothPlugin) {
+    super(app);
+    this.plugin = plugin;
+  }
+
+  onOpen(): void {
+    const { contentEl } = this;
+    contentEl.empty();
+    contentEl.createEl("h2", { text: "Import settings" });
+    contentEl.createEl("p", { text: "Paste the settings string from your other device:" });
+
+    const input = contentEl.createEl("textarea", {
+      attr: { rows: "4", style: "width: 100%; font-family: monospace; font-size: 12px;" },
+    });
+
+    new Setting(contentEl)
+      .addButton((btn) =>
+        btn.setButtonText("Import").setCta().onClick(async () => {
+          const decoded = decodeSettings(input.value);
+          if (!decoded) {
+            new Notice("Invalid settings string");
+            return;
+          }
+          Object.assign(this.plugin.settings, decoded);
+          await this.plugin.saveSettings();
+          new Notice("Settings imported — restart plugin to connect");
+          this.close();
+        })
+      );
+  }
+
+  onClose(): void {
+    this.contentEl.empty();
   }
 }
