@@ -204,10 +204,11 @@ export class SyncEngine {
     this.pulling = true;
     this.log.info("sync: starting three-way comparison");
 
+    let actions: Action[] = [];
     try {
       if (!remote) remote = await this.storage.getManifest();
 
-      const actions = this.computeActions(remote);
+      actions = this.computeActions(remote);
       const pushes = actions.filter(a => a.type === "push");
       const pulls = actions.filter(a => a.type === "pull");
       const deleteLocals = actions.filter(a => a.type === "deleteLocal");
@@ -325,7 +326,12 @@ export class SyncEngine {
     } finally {
       this.pulling = false;
       this.syncing = false;
-      this.pendingChanges.clear();
+      // Only remove paths that were overwritten by pull — preserve user edits queued during sync
+      for (const a of actions) {
+        if (a.type === "pull" || a.type === "deleteLocal") {
+          this.pendingChanges.delete(a.path);
+        }
+      }
     }
   }
 
@@ -384,19 +390,31 @@ export class SyncEngine {
     const files = this.vault.getFiles();
     this.log.info(`buildLocalManifest: vault.getFiles() returned ${files.length} files`);
 
+    const cached = this.history.files;
     let skipped = 0;
+    let reused = 0;
+    let hashed = 0;
+
     for (const file of files) {
       if (file.path.startsWith(".") || file.path.startsWith("_thoth")) {
         skipped++;
         continue;
       }
-      this.localManifest.files[file.path] = {
-        hash: await this.hashFile(file),
-        mtime: file.stat.mtime,
-        size: file.stat.size,
-      };
+
+      const prev = cached[file.path];
+      if (prev && prev.mtime === file.stat.mtime && prev.size === file.stat.size) {
+        this.localManifest.files[file.path] = prev;
+        reused++;
+      } else {
+        this.localManifest.files[file.path] = {
+          hash: await this.hashFile(file),
+          mtime: file.stat.mtime,
+          size: file.stat.size,
+        };
+        hashed++;
+      }
     }
-    this.log.info(`buildLocalManifest: indexed ${Object.keys(this.localManifest.files).length}, skipped ${skipped}`);
+    this.log.info(`buildLocalManifest: ${reused} cached, ${hashed} hashed, ${skipped} skipped`);
   }
 
   private async ensureFolder(path: string): Promise<void> {
