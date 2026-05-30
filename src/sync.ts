@@ -104,6 +104,21 @@ export class SyncEngine {
     this.log.info(`buildLocalManifest: indexed ${Object.keys(this.localManifest.files).length}, skipped ${skipped}`);
   }
 
+  private async ensureFolder(path: string): Promise<void> {
+    const parts = path.split("/");
+    parts.pop(); // remove filename
+    if (parts.length === 0) return;
+
+    let current = "";
+    for (const part of parts) {
+      current = current ? `${current}/${part}` : part;
+      const existing = this.vault.getAbstractFileByPath(current);
+      if (!existing) {
+        await this.vault.createFolder(current);
+      }
+    }
+  }
+
   private async hashFile(file: TFile): Promise<string> {
     const content = await this.vault.readBinary(file);
     const hashBuffer = await crypto.subtle.digest("SHA-256", content);
@@ -268,6 +283,7 @@ export class SyncEngine {
 
           if ((entry as any)._conflict) {
             const conflictPath = path.replace(/\.md$/, `.conflict-${remote.deviceId}.md`);
+            await this.ensureFolder(conflictPath);
             await this.vault.createBinary(conflictPath, data);
             conflicts++;
             continue;
@@ -277,6 +293,7 @@ export class SyncEngine {
           if (existing instanceof TFile) {
             await this.vault.modifyBinary(existing, data);
           } else {
+            await this.ensureFolder(path);
             await this.vault.createBinary(path, data);
           }
           this.localManifest.files[path] = entry;
