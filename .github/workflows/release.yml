@@ -10,6 +10,8 @@ jobs:
     if: "!startsWith(github.event.head_commit.message, '[skip ci]')"
     permissions:
       contents: write
+      id-token: write
+      attestations: write
     steps:
       - uses: actions/checkout@v4
 
@@ -48,6 +50,11 @@ jobs:
           git add manifest.json package.json main.js
           git commit -m "[skip ci] release ${{ steps.version.outputs.version }}"
           git push
+
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: main.js
 
       - name: Create release
         run: gh release create ${{ steps.version.outputs.version }} main.js manifest.json --title "${{ steps.version.outputs.version }}" --notes "Auto-release from commit ${{ github.sha }}"
