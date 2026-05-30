@@ -1,6 +1,6 @@
 {
   "name": "obsidian-thoth",
-  "version": "0.3.15",
+  "version": "0.3.16",
   "description": "Lightweight vault sync via S3-compatible object storage",
   "main": "main.js",
   "scripts": {
