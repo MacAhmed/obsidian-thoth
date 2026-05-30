@@ -29,6 +29,14 @@ export default class ThothPlugin extends Plugin {
       callback: () => this.syncEngine?.pull(),
     });
 
+    this.addRibbonIcon("upload-cloud", "Thoth: Push", () => {
+      this.syncEngine?.push();
+    });
+
+    this.addRibbonIcon("download-cloud", "Thoth: Pull", () => {
+      this.syncEngine?.pull();
+    });
+
     if (this.isConfigured()) {
       this.app.workspace.onLayoutReady(() => this.startSync());
     }
