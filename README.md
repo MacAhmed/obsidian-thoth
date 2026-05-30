@@ -36,6 +36,16 @@ This three-way comparison determines the correct action for each file (push, pul
 
 Both are also available as ribbon icons.
 
+## Transferring settings between devices
+
+In Settings → Thoth Sync:
+
+- **Show QR** — displays a QR code with your connection settings. Scan on your phone to get the encoded string.
+- **Copy** — copies the encoded settings string to clipboard for manual transfer (e.g., via messaging app).
+- **Import** — on the receiving device, paste the settings string to auto-fill endpoint, keys, bucket, and region.
+
+Device ID is not transferred — each device generates its own unique ID.
+
 ## Supported backends
 
 - Cloudflare R2
