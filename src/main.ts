@@ -1,6 +1,7 @@
 import { Plugin, TFile, TAbstractFile } from "obsidian";
 import { Storage } from "./storage";
 import { SyncEngine } from "./sync";
+import { History } from "./history";
 import { S3Backend } from "./backends";
 import { Logger } from "./logger";
 import { ThothSettings, ThothSettingTab, DEFAULT_SETTINGS } from "./settings";
@@ -56,9 +57,12 @@ export default class ThothPlugin extends Plugin {
     });
 
     const storage = new Storage(backend);
+    const history = new History(this);
+    await history.load();
     this.syncEngine = new SyncEngine(
       this.app.vault,
       storage,
+      history,
       this.settings.deviceId,
       this.logger
     );
