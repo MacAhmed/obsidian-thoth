@@ -11,6 +11,7 @@ export class SyncEngine {
   private pendingChanges: Set<string> = new Set();
   private debounceTimer: ReturnType<typeof setTimeout> | null = null;
   private syncing = false;
+  private pulling = false;
 
   constructor(vault: Vault, storage: Storage, deviceId: string, logger: Logger) {
     this.vault = vault;
@@ -129,12 +130,14 @@ export class SyncEngine {
   }
 
   onFileChange(path: string): void {
+    if (this.pulling) return;
     if (path.startsWith(".") || path.startsWith("_thoth") || path === "_thoth-log.md") return;
     this.pendingChanges.add(path);
     this.schedulePush();
   }
 
   onFileDelete(path: string): void {
+    if (this.pulling) return;
     if (path.startsWith(".") || path.startsWith("_thoth") || path === "_thoth-log.md") return;
     if (this.localManifest.files[path]) {
       this.localManifest.files[path].deleted = true;
@@ -206,6 +209,7 @@ export class SyncEngine {
       return;
     }
     this.syncing = true;
+    this.pulling = true;
     this.log.info("pull: starting");
 
     try {
@@ -312,7 +316,9 @@ export class SyncEngine {
       this.log.notice(`Thoth pull failed: ${e.name}: ${e.message}`, 10000);
       this.log.error("pull() threw", e);
     } finally {
+      this.pulling = false;
       this.syncing = false;
+      this.pendingChanges.clear();
     }
   }
 }
