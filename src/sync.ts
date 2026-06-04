@@ -107,6 +107,7 @@ export class SyncEngine {
   private localManifest: Manifest;
   private pendingChanges: Set<string> = new Set();
   private failedPaths: Set<string> = new Set();
+  private pulledPaths: Set<string> = new Set();
   private debounceTimer: ReturnType<typeof setTimeout> | null = null;
   private syncing = false;
   private pulling = false;
@@ -127,7 +128,7 @@ export class SyncEngine {
   }
 
   async initialize(): Promise<void> {
-    this.log.notice("Thoth: initializing...");
+    this.log.info("initialize: starting");
     try {
       await this.buildLocalManifest();
       const remote = await this.storage.getManifest();
@@ -135,7 +136,7 @@ export class SyncEngine {
       const remoteCount = remote ? Object.keys(remote.files).length : 0;
       const historyCount = Object.keys(this.history.files).length;
 
-      this.log.notice(`Thoth: local=${localCount}, remote=${remoteCount}, history=${historyCount}`);
+      this.log.info(`initialize: local=${localCount}, remote=${remoteCount}, history=${historyCount}`);
 
       if (localCount > 0 && remoteCount === 0 && historyCount === 0) {
         await this.pushAll();
@@ -199,7 +200,7 @@ export class SyncEngine {
 
   async sync(remote: Manifest | null): Promise<void> {
     if (this.syncing) {
-      this.log.notice("Thoth: sync already in progress");
+      this.log.info("sync: already in progress, skipping");
       return;
     }
     this.syncing = true;
@@ -242,6 +243,7 @@ export class SyncEngine {
 
         for (const { path, data } of results) {
           if (!data) continue;
+          this.pulledPaths.add(path);
           const existing = this.vault.getAbstractFileByPath(path);
           if (existing instanceof TFile) {
             await this.vault.modifyBinary(existing, data);
@@ -249,8 +251,17 @@ export class SyncEngine {
             await this.ensureFolder(path);
             await this.vault.createBinary(path, data);
           }
+          const written = this.vault.getAbstractFileByPath(path);
           const action = batch.find(b => b.path === path);
-          if (action) this.localManifest.files[path] = action.entry;
+          if (action && written instanceof TFile) {
+            this.localManifest.files[path] = {
+              hash: action.entry.hash,
+              mtime: written.stat.mtime,
+              size: written.stat.size,
+            };
+          } else if (action) {
+            this.localManifest.files[path] = action.entry;
+          }
         }
 
         if ((i + CONCURRENCY) % 100 < CONCURRENCY && pulls.length > 100) {
@@ -368,7 +379,10 @@ export class SyncEngine {
       await this.storage.putManifest(this.localManifest);
       await this.history.record(this.localManifest.files);
 
-      this.log.notice(`Thoth: synced — ↑${pushes.length} ↓${pulls.length} 🗑${deleteLocals.length + deleteRemotes.length} ⚠${conflicts.length}`);
+      const total = pushes.length + pulls.length + deleteLocals.length + deleteRemotes.length + conflicts.length;
+      if (total > 0) {
+        this.log.notice(`Thoth: synced — ↑${pushes.length} ↓${pulls.length} 🗑${deleteLocals.length + deleteRemotes.length} ⚠${conflicts.length}`);
+      }
     } catch (e: any) {
       this.log.notice(`Thoth sync failed: ${e.name}: ${e.message}`, 10000);
       this.log.error("sync() threw", e);
@@ -532,6 +546,7 @@ export class SyncEngine {
 
   onFileChange(path: string): void {
     if (this.pulling) return;
+    if (this.pulledPaths.delete(path)) return;
     if (path.startsWith(".") || path.startsWith("_thoth")) return;
     this.pendingChanges.add(path);
     this.schedulePush();
@@ -539,6 +554,7 @@ export class SyncEngine {
 
   onFileDelete(path: string): void {
     if (this.pulling) return;
+    if (this.pulledPaths.delete(path)) return;
     if (path.startsWith(".") || path.startsWith("_thoth")) return;
     this.pendingChanges.add(path);
     this.schedulePush();
