@@ -10,6 +10,7 @@ export interface ThothSettings {
   bucket: string;
   pollInterval: number;
   deviceId: string;
+  mergeStrategy: "auto-merge" | "conflict-file";
 }
 
 export const DEFAULT_SETTINGS: ThothSettings = {
@@ -20,6 +21,7 @@ export const DEFAULT_SETTINGS: ThothSettings = {
   bucket: "",
   pollInterval: 5,
   deviceId: crypto.randomUUID().slice(0, 8),
+  mergeStrategy: "auto-merge",
 };
 
 export class ThothSettingTab extends PluginSettingTab {
@@ -105,6 +107,20 @@ export class ThothSettingTab extends PluginSettingTab {
           this.plugin.settings.deviceId = value;
           await this.plugin.saveSettings();
         })
+      );
+
+    new Setting(containerEl)
+      .setName("Conflict resolution")
+      .setDesc("How to handle files edited on multiple devices between syncs")
+      .addDropdown((drop) =>
+        drop
+          .addOption("auto-merge", "Auto-merge (recommended)")
+          .addOption("conflict-file", "Create conflict file")
+          .setValue(this.plugin.settings.mergeStrategy)
+          .onChange(async (value) => {
+            this.plugin.settings.mergeStrategy = value as "auto-merge" | "conflict-file";
+            await this.plugin.saveSettings();
+          })
       );
 
     new Setting(containerEl)

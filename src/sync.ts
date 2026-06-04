@@ -2,6 +2,7 @@ import { Vault, TFile } from "obsidian";
 import { Storage, Manifest, FileEntry } from "./storage";
 import { History } from "./history";
 import { Logger } from "./logger";
+import { threeWayMerge } from "./merge";
 
 type Action =
   | { type: "push"; path: string }
@@ -16,17 +17,19 @@ export class SyncEngine {
   private history: History;
   private log: Logger;
   private deviceId: string;
+  private mergeStrategy: "auto-merge" | "conflict-file";
   private localManifest: Manifest;
   private pendingChanges: Set<string> = new Set();
   private debounceTimer: ReturnType<typeof setTimeout> | null = null;
   private syncing = false;
   private pulling = false;
 
-  constructor(vault: Vault, storage: Storage, history: History, deviceId: string, logger: Logger) {
+  constructor(vault: Vault, storage: Storage, history: History, deviceId: string, logger: Logger, mergeStrategy: "auto-merge" | "conflict-file") {
     this.vault = vault;
     this.storage = storage;
     this.history = history;
     this.deviceId = deviceId;
+    this.mergeStrategy = mergeStrategy;
     this.log = logger;
     this.localManifest = {
       version: 1,
@@ -76,7 +79,11 @@ export class SyncEngine {
         if (!(file instanceof TFile)) return;
         try {
           const content = await this.vault.readBinary(file);
-          await this.storage.putFile(path, content);
+          const hash = this.localManifest.files[path].hash;
+          await Promise.all([
+            this.storage.putFile(path, content),
+            this.storage.putBlob(hash, content),
+          ]);
           pushed++;
         } catch (e: any) {
           failed++;
@@ -256,7 +263,7 @@ export class SyncEngine {
         }
       }
 
-      // Push files (parallel upload)
+      // Push files (parallel upload + blob)
       for (let i = 0; i < pushes.length; i += CONCURRENCY) {
         const batch = pushes.slice(i, i + CONCURRENCY);
         await Promise.all(batch.map(async ({ path }) => {
@@ -264,7 +271,11 @@ export class SyncEngine {
           if (!(file instanceof TFile)) return;
           try {
             const content = await this.vault.readBinary(file);
-            await this.storage.putFile(path, content);
+            const hash = this.localManifest.files[path]?.hash || await this.hashBytes(content);
+            await Promise.all([
+              this.storage.putFile(path, content),
+              this.storage.putBlob(hash, content),
+            ]);
           } catch (e: any) {
             this.log.error(`sync: upload failed ${path}`, e);
           }
@@ -288,28 +299,71 @@ export class SyncEngine {
         delete this.localManifest.files[path];
       }
 
-      // Handle conflicts — keep both, rename remote copy
-      for (let i = 0; i < conflicts.length; i += CONCURRENCY) {
-        const batch = conflicts.slice(i, i + CONCURRENCY) as { type: "conflict"; path: string; entry: FileEntry }[];
-        const results = await Promise.all(
-          batch.map(async ({ path }) => {
-            try {
-              return { path, data: await this.storage.getFile(path) };
-            } catch (e: any) {
-              this.log.error(`sync: conflict download failed ${path}`, e);
-              return { path, data: null };
-            }
-          })
-        );
+      // Handle conflicts — attempt three-way merge for markdown, fall back to conflict file
+      for (const action of conflicts) {
+        const { path, entry } = action as { type: "conflict"; path: string; entry: FileEntry };
+        const isMarkdown = path.endsWith(".md");
+        const baseHash = this.history.files[path]?.hash;
 
-        for (const { path, data } of results) {
+        if (isMarkdown && this.mergeStrategy === "auto-merge" && baseHash) {
+          try {
+            const [remoteData, baseData] = await Promise.all([
+              this.storage.getFile(path),
+              this.storage.getBlob(baseHash),
+            ]);
+
+            if (remoteData && baseData) {
+              const decoder = new TextDecoder();
+              const baseText = decoder.decode(baseData);
+              const remoteText = decoder.decode(remoteData);
+              const localFile = this.vault.getAbstractFileByPath(path);
+              const localText = localFile instanceof TFile
+                ? await this.vault.read(localFile)
+                : "";
+
+              const result = threeWayMerge(baseText, localText, remoteText);
+
+              if (result.success) {
+                const file = this.vault.getAbstractFileByPath(path);
+                if (file instanceof TFile) {
+                  await this.vault.modify(file, result.merged);
+                }
+                const mergedBytes = new TextEncoder().encode(result.merged);
+                const mergedHash = await this.hashBytes(mergedBytes.buffer);
+                this.localManifest.files[path] = {
+                  hash: mergedHash,
+                  mtime: Date.now(),
+                  size: mergedBytes.byteLength,
+                };
+                await Promise.all([
+                  this.storage.putFile(path, mergedBytes.buffer),
+                  this.storage.putBlob(mergedHash, mergedBytes.buffer),
+                ]);
+                this.log.info(`sync: auto-merged ${path}`);
+                continue;
+              }
+            }
+
+            this.log.info(`sync: merge failed for ${path}, falling back to conflict file`);
+            this.log.notice(`Thoth: merge failed for ${path}, created conflict file`);
+          } catch (e: any) {
+            this.log.error(`sync: merge error for ${path}`, e);
+            this.log.notice(`Thoth: merge failed for ${path}, created conflict file`);
+          }
+        }
+
+        // Fallback: create conflict file
+        try {
+          const data = await this.storage.getFile(path);
           if (!data) continue;
           const ext = path.lastIndexOf(".") > -1 ? path.slice(path.lastIndexOf(".")) : "";
-          const base = path.slice(0, path.length - ext.length);
-          const conflictPath = `${base}.conflict-${remote?.deviceId || "remote"}${ext}`;
+          const stem = path.slice(0, path.length - ext.length);
+          const conflictPath = `${stem}.conflict-${remote?.deviceId || "remote"}${ext}`;
           await this.ensureFolder(conflictPath);
           await this.vault.createBinary(conflictPath, data);
           this.log.info(`sync: conflict saved as ${conflictPath}`);
+        } catch (e: any) {
+          this.log.error(`sync: conflict download failed ${path}`, e);
         }
       }
 
@@ -365,7 +419,10 @@ export class SyncEngine {
         const hash = await this.hashFile(file);
 
         this.log.info(`push: uploading ${path} (${content.byteLength} bytes)`);
-        await this.storage.putFile(path, content);
+        await Promise.all([
+          this.storage.putFile(path, content),
+          this.storage.putBlob(hash, content),
+        ]);
         this.localManifest.files[path] = {
           hash,
           mtime: file.stat.mtime,
@@ -434,7 +491,11 @@ export class SyncEngine {
 
   private async hashFile(file: TFile): Promise<string> {
     const content = await this.vault.readBinary(file);
-    const hashBuffer = await crypto.subtle.digest("SHA-256", content);
+    return this.hashBytes(content);
+  }
+
+  private async hashBytes(data: ArrayBuffer): Promise<string> {
+    const hashBuffer = await crypto.subtle.digest("SHA-256", data);
     const hashArray = new Uint8Array(hashBuffer);
     return Array.from(hashArray)
       .map((b) => b.toString(16).padStart(2, "0"))

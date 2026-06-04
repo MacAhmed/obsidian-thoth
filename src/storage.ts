@@ -38,6 +38,14 @@ export class Storage {
     await this.backend.delete(`files/${key}`);
   }
 
+  async putBlob(hash: string, data: ArrayBuffer): Promise<void> {
+    await this.backend.put(`_thoth/blobs/${hash}`, data);
+  }
+
+  async getBlob(hash: string): Promise<ArrayBuffer | null> {
+    return this.backend.get(`_thoth/blobs/${hash}`);
+  }
+
   async getManifest(): Promise<Manifest | null> {
     const data = await this.backend.get("_thoth/manifest.json");
     if (!data) return null;

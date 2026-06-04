@@ -72,7 +72,8 @@ export default class ThothPlugin extends Plugin {
       storage,
       history,
       this.settings.deviceId,
-      this.logger
+      this.logger,
+      this.settings.mergeStrategy
     );
 
     await this.syncEngine.initialize();

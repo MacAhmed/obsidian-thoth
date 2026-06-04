@@ -47,7 +47,7 @@ export class S3Backend implements StorageBackend {
         new GetObjectCommand({ Bucket: this.bucket, Key: key })
       );
       const bytes = await res.Body?.transformToByteArray();
-      return bytes?.buffer ?? null;
+      return bytes ? (bytes.buffer as ArrayBuffer) : null;
     } catch (e: any) {
       if (e.name === "NoSuchKey" || e.$metadata?.httpStatusCode === 404) {
         return null;
