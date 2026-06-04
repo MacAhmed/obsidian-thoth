@@ -4,12 +4,98 @@ import { History } from "./history";
 import { Logger } from "./logger";
 import { threeWayMerge } from "./merge";
 
-type Action =
+export type Action =
   | { type: "push"; path: string }
   | { type: "pull"; path: string; entry: FileEntry }
   | { type: "deleteLocal"; path: string }
   | { type: "deleteRemote"; path: string }
   | { type: "conflict"; path: string; entry: FileEntry };
+
+export function computeActions(
+  localFiles: Record<string, FileEntry>,
+  remoteFiles: Record<string, FileEntry>,
+  historyFiles: Record<string, FileEntry>
+): Action[] {
+  const actions: Action[] = [];
+
+  const allPaths = new Set([
+    ...Object.keys(localFiles),
+    ...Object.keys(remoteFiles),
+    ...Object.keys(historyFiles),
+  ]);
+
+  for (const path of allPaths) {
+    const local = localFiles[path];
+    const remoteEntry = remoteFiles[path];
+    const prev = historyFiles[path];
+
+    const localExists = local && !local.deleted;
+    const remoteExists = remoteEntry && !remoteEntry.deleted;
+    const prevExists = !!prev;
+
+    if (localExists && remoteExists && local.hash === remoteEntry.hash) continue;
+
+    if (localExists && !remoteExists && !prevExists) {
+      actions.push({ type: "push", path });
+      continue;
+    }
+
+    if (!localExists && remoteExists && !prevExists) {
+      actions.push({ type: "pull", path, entry: remoteEntry });
+      continue;
+    }
+
+    if (!localExists && prevExists && remoteExists) {
+      if (remoteEntry.hash === prev.hash) {
+        actions.push({ type: "deleteRemote", path });
+      } else {
+        actions.push({ type: "pull", path, entry: remoteEntry });
+      }
+      continue;
+    }
+
+    if (localExists && prevExists && !remoteExists) {
+      if (local.hash === prev.hash) {
+        actions.push({ type: "deleteLocal", path });
+      } else {
+        actions.push({ type: "push", path });
+      }
+      continue;
+    }
+
+    if (!localExists && !remoteExists) continue;
+
+    if (localExists && remoteExists && prev) {
+      if (local.hash === prev.hash && remoteEntry.hash !== prev.hash) {
+        actions.push({ type: "pull", path, entry: remoteEntry });
+        continue;
+      }
+      if (local.hash !== prev.hash && remoteEntry.hash === prev.hash) {
+        actions.push({ type: "push", path });
+        continue;
+      }
+      if (local.hash !== prev.hash && remoteEntry.hash !== prev.hash) {
+        actions.push({ type: "conflict", path, entry: remoteEntry });
+        continue;
+      }
+    }
+
+    if (localExists && remoteExists && !prev) {
+      if (local.mtime >= remoteEntry.mtime) {
+        actions.push({ type: "push", path });
+      } else {
+        actions.push({ type: "pull", path, entry: remoteEntry });
+      }
+      continue;
+    }
+
+    if (remoteExists) {
+      actions.push({ type: "pull", path, entry: remoteEntry });
+    }
+  }
+
+  return actions;
+}
 
 export class SyncEngine {
   private vault: Vault;
@@ -104,103 +190,11 @@ export class SyncEngine {
   }
 
   private computeActions(remote: Manifest | null): Action[] {
-    const actions: Action[] = [];
-    const remoteFiles = remote?.files || {};
-    const historyFiles = this.history.files;
-    const localFiles = this.localManifest.files;
-
-    const allPaths = new Set([
-      ...Object.keys(localFiles),
-      ...Object.keys(remoteFiles),
-      ...Object.keys(historyFiles),
-    ]);
-
-    for (const path of allPaths) {
-      const local = localFiles[path];
-      const remoteEntry = remoteFiles[path];
-      const prev = historyFiles[path];
-
-      const localExists = local && !local.deleted;
-      const remoteExists = remoteEntry && !remoteEntry.deleted;
-      const prevExists = !!prev;
-
-      // Both exist and unchanged
-      if (localExists && remoteExists && local.hash === remoteEntry.hash) continue;
-
-      // New locally (not in history, not remote)
-      if (localExists && !remoteExists && !prevExists) {
-        actions.push({ type: "push", path });
-        continue;
-      }
-
-      // New remotely (not in history, not local)
-      if (!localExists && remoteExists && !prevExists) {
-        actions.push({ type: "pull", path, entry: remoteEntry });
-        continue;
-      }
-
-      // Deleted locally (was in history, gone now)
-      if (!localExists && prevExists && remoteExists) {
-        if (remoteEntry.hash === prev.hash) {
-          // Remote hasn't changed since last sync — safe to delete remote
-          actions.push({ type: "deleteRemote", path });
-        } else {
-          // Remote changed too — conflict, pull the remote version
-          actions.push({ type: "pull", path, entry: remoteEntry });
-        }
-        continue;
-      }
-
-      // Deleted remotely (was in history, gone from remote)
-      if (localExists && prevExists && !remoteExists) {
-        if (local.hash === prev.hash) {
-          // Local hasn't changed since last sync — safe to delete local
-          actions.push({ type: "deleteLocal", path });
-        } else {
-          // Local changed since last sync — keep local, push it
-          actions.push({ type: "push", path });
-        }
-        continue;
-      }
-
-      // Both deleted
-      if (!localExists && !remoteExists) continue;
-
-      // Modified remotely, local unchanged
-      if (localExists && remoteExists && prev) {
-        if (local.hash === prev.hash && remoteEntry.hash !== prev.hash) {
-          actions.push({ type: "pull", path, entry: remoteEntry });
-          continue;
-        }
-        // Modified locally, remote unchanged
-        if (local.hash !== prev.hash && remoteEntry.hash === prev.hash) {
-          actions.push({ type: "push", path });
-          continue;
-        }
-        // Both modified — conflict
-        if (local.hash !== prev.hash && remoteEntry.hash !== prev.hash) {
-          actions.push({ type: "conflict", path, entry: remoteEntry });
-          continue;
-        }
-      }
-
-      // No history but both exist with different hashes — use mtime as fallback
-      if (localExists && remoteExists && !prev) {
-        if (local.mtime >= remoteEntry.mtime) {
-          actions.push({ type: "push", path });
-        } else {
-          actions.push({ type: "pull", path, entry: remoteEntry });
-        }
-        continue;
-      }
-
-      // Fallback: pull if remote exists
-      if (remoteExists) {
-        actions.push({ type: "pull", path, entry: remoteEntry });
-      }
-    }
-
-    return actions;
+    return computeActions(
+      this.localManifest.files,
+      remote?.files || {},
+      this.history.files
+    );
   }
 
   async sync(remote: Manifest | null): Promise<void> {

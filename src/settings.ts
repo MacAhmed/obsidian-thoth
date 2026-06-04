@@ -171,7 +171,7 @@ export class ThothSettingTab extends PluginSettingTab {
   }
 }
 
-function encodeSettings(settings: ThothSettings): string {
+export function encodeSettings(settings: ThothSettings): string {
   const payload = {
     e: settings.endpoint,
     r: settings.region,
@@ -183,7 +183,7 @@ function encodeSettings(settings: ThothSettings): string {
   return btoa(JSON.stringify(payload));
 }
 
-function decodeSettings(encoded: string): Partial<ThothSettings> | null {
+export function decodeSettings(encoded: string): Partial<ThothSettings> | null {
   try {
     const payload = JSON.parse(atob(encoded.trim()));
     return {
