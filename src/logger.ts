@@ -1,4 +1,4 @@
-import { Vault, Notice } from "obsidian";
+import { Vault, TFile, Notice } from "obsidian";
 
 const LOG_PATH = "_thoth-log.md";
 const MAX_LINES = 500;
@@ -52,8 +52,8 @@ export class Logger {
       const file = this.vault.getAbstractFileByPath(LOG_PATH);
       let content = "";
 
-      if (file) {
-        content = await this.vault.read(file as any);
+      if (file instanceof TFile) {
+        content = await this.vault.read(file);
       }
 
       content = content + newLines.join("\n") + "\n";
@@ -63,8 +63,8 @@ export class Logger {
         content = lines.slice(-MAX_LINES).join("\n");
       }
 
-      if (file) {
-        await this.vault.modify(file as any, content);
+      if (file instanceof TFile) {
+        await this.vault.modify(file, content);
       } else {
         await this.vault.create(LOG_PATH, content);
       }

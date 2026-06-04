@@ -1,7 +1,7 @@
-import { Plugin } from "obsidian";
+import { Vault, TFile } from "obsidian";
 import type { FileEntry } from "./storage";
 
-const HISTORY_KEY = "thoth-sync-history";
+const HISTORY_PATH = "_thoth-history.json";
 
 export interface SyncHistory {
   files: Record<string, FileEntry>;
@@ -9,25 +9,41 @@ export interface SyncHistory {
 }
 
 export class History {
-  private plugin: Plugin;
+  private vault: Vault;
   private data: SyncHistory;
+  private saving: Promise<void> = Promise.resolve();
 
-  constructor(plugin: Plugin) {
-    this.plugin = plugin;
+  constructor(vault: Vault) {
+    this.vault = vault;
     this.data = { files: {}, syncedAt: 0 };
   }
 
   async load(): Promise<void> {
-    const saved = await this.plugin.loadData();
-    if (saved?.[HISTORY_KEY]) {
-      this.data = saved[HISTORY_KEY];
+    try {
+      const file = this.vault.getAbstractFileByPath(HISTORY_PATH);
+      if (!(file instanceof TFile)) return;
+      const text = await this.vault.read(file);
+      this.data = JSON.parse(text);
+    } catch {
+      // Missing or corrupt — start fresh
     }
   }
 
-  async save(): Promise<void> {
-    const existing = (await this.plugin.loadData()) || {};
-    existing[HISTORY_KEY] = this.data;
-    await this.plugin.saveData(existing);
+  private async save(): Promise<void> {
+    this.saving = this.saving.then(async () => {
+      const text = JSON.stringify(this.data);
+      try {
+        const file = this.vault.getAbstractFileByPath(HISTORY_PATH);
+        if (file instanceof TFile) {
+          await this.vault.modify(file, text);
+        } else {
+          await this.vault.create(HISTORY_PATH, text);
+        }
+      } catch {
+        // Non-critical — will retry on next record()
+      }
+    });
+    await this.saving;
   }
 
   get files(): Record<string, FileEntry> {

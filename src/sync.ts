@@ -20,6 +20,7 @@ export class SyncEngine {
   private mergeStrategy: "auto-merge" | "conflict-file";
   private localManifest: Manifest;
   private pendingChanges: Set<string> = new Set();
+  private failedPaths: Set<string> = new Set();
   private debounceTimer: ReturnType<typeof setTimeout> | null = null;
   private syncing = false;
   private pulling = false;
@@ -254,8 +255,8 @@ export class SyncEngine {
             await this.ensureFolder(path);
             await this.vault.createBinary(path, data);
           }
-          const entry = (batch.find(b => b.path === path) as any).entry;
-          this.localManifest.files[path] = entry;
+          const action = batch.find(b => b.path === path);
+          if (action) this.localManifest.files[path] = action.entry;
         }
 
         if ((i + CONCURRENCY) % 100 < CONCURRENCY && pulls.length > 100) {
@@ -398,48 +399,64 @@ export class SyncEngine {
     if (this.syncing || this.pendingChanges.size === 0) return;
     this.syncing = true;
 
+    for (const path of this.failedPaths) this.pendingChanges.add(path);
+    this.failedPaths.clear();
+
     const changes = [...this.pendingChanges];
+    for (const path of changes) this.pendingChanges.delete(path);
     this.log.info(`push: ${changes.length} files queued`);
 
+    let pushed = 0;
     try {
-      this.pendingChanges.clear();
-
       for (const path of changes) {
         const file = this.vault.getAbstractFileByPath(path);
 
         if (!file || !(file instanceof TFile)) {
-          // File was deleted
           this.log.info(`push: deleting ${path}`);
-          await this.storage.deleteFile(path);
-          delete this.localManifest.files[path];
+          try {
+            await this.storage.deleteFile(path);
+            delete this.localManifest.files[path];
+          } catch (e: any) {
+            this.log.error(`push: delete failed ${path}`, e);
+            this.failedPaths.add(path);
+          }
           continue;
         }
 
-        const content = await this.vault.readBinary(file);
-        const hash = await this.hashFile(file);
-
-        this.log.info(`push: uploading ${path} (${content.byteLength} bytes)`);
-        await Promise.all([
-          this.storage.putFile(path, content),
-          this.storage.putBlob(hash, content),
-        ]);
-        this.localManifest.files[path] = {
-          hash,
-          mtime: file.stat.mtime,
-          size: file.stat.size,
-        };
+        try {
+          const { content, hash } = await this.readAndHash(file);
+          this.log.info(`push: uploading ${path} (${content.byteLength} bytes)`);
+          await Promise.all([
+            this.storage.putFile(path, content),
+            this.storage.putBlob(hash, content),
+          ]);
+          this.localManifest.files[path] = {
+            hash,
+            mtime: file.stat.mtime,
+            size: file.stat.size,
+          };
+          pushed++;
+        } catch (e: any) {
+          this.log.error(`push: failed ${path}`, e);
+          this.failedPaths.add(path);
+        }
       }
 
-      this.localManifest.updatedAt = Date.now();
-      this.localManifest.deviceId = this.deviceId;
-      await this.storage.putManifest(this.localManifest);
-      await this.history.record(this.localManifest.files);
-      this.log.info(`push: done, manifest and history updated`);
+      if (pushed > 0) {
+        this.localManifest.updatedAt = Date.now();
+        this.localManifest.deviceId = this.deviceId;
+        await this.storage.putManifest(this.localManifest);
+        await this.history.record(this.localManifest.files);
+      }
+      this.log.info(`push: done, ${pushed}/${changes.length} succeeded`);
     } catch (e: any) {
       this.log.notice(`Thoth push failed: ${e.name}: ${e.message}`, 10000);
       this.log.error("push() threw", e);
     } finally {
       this.syncing = false;
+      if (this.pendingChanges.size > 0 || this.failedPaths.size > 0) {
+        this.schedulePush();
+      }
     }
   }
 
@@ -463,8 +480,9 @@ export class SyncEngine {
         this.localManifest.files[file.path] = prev;
         reused++;
       } else {
+        const { hash } = await this.readAndHash(file);
         this.localManifest.files[file.path] = {
-          hash: await this.hashFile(file),
+          hash,
           mtime: file.stat.mtime,
           size: file.stat.size,
         };
@@ -489,9 +507,10 @@ export class SyncEngine {
     }
   }
 
-  private async hashFile(file: TFile): Promise<string> {
+  private async readAndHash(file: TFile): Promise<{ content: ArrayBuffer; hash: string }> {
     const content = await this.vault.readBinary(file);
-    return this.hashBytes(content);
+    const hash = await this.hashBytes(content);
+    return { content, hash };
   }
 
   private async hashBytes(data: ArrayBuffer): Promise<string> {
@@ -504,14 +523,14 @@ export class SyncEngine {
 
   onFileChange(path: string): void {
     if (this.pulling) return;
-    if (path.startsWith(".") || path.startsWith("_thoth") || path === "_thoth-log.md") return;
+    if (path.startsWith(".") || path.startsWith("_thoth")) return;
     this.pendingChanges.add(path);
     this.schedulePush();
   }
 
   onFileDelete(path: string): void {
     if (this.pulling) return;
-    if (path.startsWith(".") || path.startsWith("_thoth") || path === "_thoth-log.md") return;
+    if (path.startsWith(".") || path.startsWith("_thoth")) return;
     this.pendingChanges.add(path);
     this.schedulePush();
   }

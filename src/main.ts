@@ -65,7 +65,7 @@ export default class ThothPlugin extends Plugin {
     });
 
     const storage = new Storage(backend);
-    const history = new History(this);
+    const history = new History(this.app.vault);
     await history.load();
     this.syncEngine = new SyncEngine(
       this.app.vault,

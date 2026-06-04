@@ -42,27 +42,24 @@ export class ThothSettingTab extends PluginSettingTab {
       .setName("Endpoint URL")
       .setDesc("S3-compatible endpoint (e.g., Cloudflare R2)")
       .addText((text) =>
-        text.setValue(this.plugin.settings.endpoint).onChange(async (value) => {
+        text.setValue(this.plugin.settings.endpoint).onChange((value) => {
           this.plugin.settings.endpoint = value;
-          await this.plugin.saveSettings();
         })
       );
 
     new Setting(containerEl)
       .setName("Region")
       .addText((text) =>
-        text.setValue(this.plugin.settings.region).onChange(async (value) => {
+        text.setValue(this.plugin.settings.region).onChange((value) => {
           this.plugin.settings.region = value;
-          await this.plugin.saveSettings();
         })
       );
 
     new Setting(containerEl)
       .setName("Access Key")
       .addText((text) =>
-        text.setValue(this.plugin.settings.accessKey).onChange(async (value) => {
+        text.setValue(this.plugin.settings.accessKey).onChange((value) => {
           this.plugin.settings.accessKey = value;
-          await this.plugin.saveSettings();
         })
       );
 
@@ -70,18 +67,16 @@ export class ThothSettingTab extends PluginSettingTab {
       .setName("Secret Key")
       .addText((text) => {
         text.inputEl.type = "password";
-        text.setValue(this.plugin.settings.secretKey).onChange(async (value) => {
+        text.setValue(this.plugin.settings.secretKey).onChange((value) => {
           this.plugin.settings.secretKey = value;
-          await this.plugin.saveSettings();
         });
       });
 
     new Setting(containerEl)
       .setName("Bucket")
       .addText((text) =>
-        text.setValue(this.plugin.settings.bucket).onChange(async (value) => {
+        text.setValue(this.plugin.settings.bucket).onChange((value) => {
           this.plugin.settings.bucket = value;
-          await this.plugin.saveSettings();
         })
       );
 
@@ -93,9 +88,8 @@ export class ThothSettingTab extends PluginSettingTab {
           .setLimits(1, 30, 1)
           .setValue(this.plugin.settings.pollInterval)
           .setDynamicTooltip()
-          .onChange(async (value) => {
+          .onChange((value) => {
             this.plugin.settings.pollInterval = value;
-            await this.plugin.saveSettings();
           })
       );
 
@@ -103,9 +97,18 @@ export class ThothSettingTab extends PluginSettingTab {
       .setName("Device ID")
       .setDesc("Unique identifier for this device")
       .addText((text) =>
-        text.setValue(this.plugin.settings.deviceId).onChange(async (value) => {
+        text.setValue(this.plugin.settings.deviceId).onChange((value) => {
           this.plugin.settings.deviceId = value;
+        })
+      );
+
+    new Setting(containerEl)
+      .setName("Save & Connect")
+      .setDesc("Save settings and start syncing")
+      .addButton((btn) =>
+        btn.setButtonText("Save").setCta().onClick(async () => {
           await this.plugin.saveSettings();
+          new Notice("Settings saved");
         })
       );
 
