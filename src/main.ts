@@ -104,7 +104,7 @@ export default class ThothPlugin extends Plugin {
 
     this.pollInterval = setInterval(
       () => this.syncEngine?.pull(),
-      this.settings.pollInterval * 60 * 1000
+      this.settings.pollInterval * 1000
     );
 
     this.logger.notice("Thoth: sync started");

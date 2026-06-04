@@ -19,7 +19,7 @@ export const DEFAULT_SETTINGS: ThothSettings = {
   accessKey: "",
   secretKey: "",
   bucket: "",
-  pollInterval: 5,
+  pollInterval: 30,
   deviceId: crypto.randomUUID().slice(0, 8),
   mergeStrategy: "auto-merge",
 };
@@ -81,11 +81,11 @@ export class ThothSettingTab extends PluginSettingTab {
       );
 
     new Setting(containerEl)
-      .setName("Poll interval (minutes)")
+      .setName("Poll interval (seconds)")
       .setDesc("How often to check for remote changes")
       .addSlider((slider) =>
         slider
-          .setLimits(1, 30, 1)
+          .setLimits(10, 300, 10)
           .setValue(this.plugin.settings.pollInterval)
           .setDynamicTooltip()
           .onChange((value) => {

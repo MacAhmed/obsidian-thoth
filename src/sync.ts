@@ -393,6 +393,21 @@ export class SyncEngine {
     if (this.syncing || this.pendingChanges.size === 0) return;
     this.syncing = true;
 
+    // Pull-before-push: incorporate remote changes before pushing ours
+    try {
+      const remote = await this.storage.getManifest();
+      const actions = computeActions(this.localManifest.files, remote?.files || {}, this.history.files);
+      const hasRemoteChanges = actions.some(a => a.type === "pull" || a.type === "deleteLocal" || a.type === "conflict");
+      if (hasRemoteChanges) {
+        this.syncing = false;
+        await this.sync(remote);
+        if (this.pendingChanges.size > 0) this.schedulePush();
+        return;
+      }
+    } catch (e: any) {
+      this.log.error("push: pull-before-push failed, continuing", e);
+    }
+
     for (const path of this.failedPaths) this.pendingChanges.add(path);
     this.failedPaths.clear();
 

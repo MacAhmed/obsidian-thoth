@@ -72,7 +72,7 @@ describe("DEFAULT_SETTINGS", () => {
     expect(DEFAULT_SETTINGS.accessKey).toBe("");
     expect(DEFAULT_SETTINGS.secretKey).toBe("");
     expect(DEFAULT_SETTINGS.bucket).toBe("");
-    expect(DEFAULT_SETTINGS.pollInterval).toBe(5);
+    expect(DEFAULT_SETTINGS.pollInterval).toBe(30);
     expect(DEFAULT_SETTINGS.mergeStrategy).toBe("auto-merge");
   });
 
