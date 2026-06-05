@@ -437,9 +437,8 @@ export class SyncEngine {
     } finally {
       this.pulling = false;
       this.syncing = false;
-      // Only remove paths that were overwritten by pull — preserve user edits queued during sync
       for (const a of actions) {
-        if (a.type === "pull" || a.type === "deleteLocal") {
+        if (a.type === "pull" || a.type === "deleteLocal" || a.type === "push" || a.type === "deleteRemote") {
           this.pendingChanges.delete(a.path);
         }
       }
