@@ -211,6 +211,20 @@ export class SyncEngine {
     try {
       if (!remote) remote = await this.storage.getManifest();
 
+      // Ensure pending local files are in the manifest before computing actions
+      for (const path of this.pendingChanges) {
+        if (this.localManifest.files[path]) continue;
+        const file = this.vault.getAbstractFileByPath(path);
+        if (file instanceof TFile) {
+          const { hash } = await this.readAndHash(file);
+          this.localManifest.files[path] = {
+            hash,
+            mtime: file.stat.mtime,
+            size: file.stat.size,
+          };
+        }
+      }
+
       actions = this.computeActions(remote);
       const pushes = actions.filter(a => a.type === "push");
       const pulls = actions.filter(a => a.type === "pull");
