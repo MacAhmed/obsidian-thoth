@@ -44,7 +44,11 @@ export class S3Backend implements StorageBackend {
   async get(key: string): Promise<ArrayBuffer | null> {
     try {
       const res = await this.client.send(
-        new GetObjectCommand({ Bucket: this.bucket, Key: key })
+        new GetObjectCommand({
+          Bucket: this.bucket,
+          Key: key,
+          ResponseCacheControl: "no-store",
+        })
       );
       const bytes = await res.Body?.transformToByteArray();
       return bytes ? (bytes.buffer as ArrayBuffer) : null;
