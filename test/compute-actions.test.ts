@@ -46,16 +46,25 @@ describe("computeActions", () => {
     expect(actions).toEqual([{ type: "pull", path: "a.md", entry: remote["a.md"] }]);
   });
 
-  it("deletes local when file deleted remotely and local unchanged", () => {
+  it("deletes local when remote has explicit delete marker and local unchanged", () => {
     const prev = { "a.md": entry("aaa") };
     const local = { "a.md": entry("aaa") };
-    const actions = computeActions(local, {}, prev);
+    const remote = { "a.md": deleted("aaa") };
+    const actions = computeActions(local, remote, prev);
     expect(actions).toEqual([{ type: "deleteLocal", path: "a.md" }]);
   });
 
-  it("pushes when file deleted remotely but local changed", () => {
+  it("pushes when remote has explicit delete marker but local changed", () => {
     const prev = { "a.md": entry("aaa") };
     const local = { "a.md": entry("bbb") };
+    const remote = { "a.md": deleted("aaa") };
+    const actions = computeActions(local, remote, prev);
+    expect(actions).toEqual([{ type: "push", path: "a.md" }]);
+  });
+
+  it("pushes when file absent from remote but in history (not a deletion)", () => {
+    const prev = { "a.md": entry("aaa") };
+    const local = { "a.md": entry("aaa") };
     const actions = computeActions(local, {}, prev);
     expect(actions).toEqual([{ type: "push", path: "a.md" }]);
   });

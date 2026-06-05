@@ -55,8 +55,15 @@ export function computeActions(
     }
 
     if (localExists && prevExists && !remoteExists) {
-      if (local.hash === prev.hash) {
-        actions.push({ type: "deleteLocal", path });
+      // Only delete local if remote explicitly marked it deleted.
+      // Mere absence from the manifest means the other device hasn't
+      // seen this file yet (race) — push it instead of deleting.
+      if (remoteEntry?.deleted) {
+        if (local.hash === prev.hash) {
+          actions.push({ type: "deleteLocal", path });
+        } else {
+          actions.push({ type: "push", path });
+        }
       } else {
         actions.push({ type: "push", path });
       }
@@ -326,14 +333,24 @@ export class SyncEngine {
           await this.vault.delete(file);
           this.log.info(`sync: deleted local ${path}`);
         }
-        delete this.localManifest.files[path];
+        this.localManifest.files[path] = {
+          hash: "",
+          mtime: Date.now(),
+          size: 0,
+          deleted: true,
+        };
       }
 
       // Delete remote files
       for (const { path } of deleteRemotes) {
         await this.storage.deleteFile(path);
         this.log.info(`sync: deleted remote ${path}`);
-        delete this.localManifest.files[path];
+        this.localManifest.files[path] = {
+          hash: "",
+          mtime: Date.now(),
+          size: 0,
+          deleted: true,
+        };
       }
 
       // Handle conflicts — attempt three-way merge for markdown, fall back to conflict file
@@ -469,7 +486,12 @@ export class SyncEngine {
           this.log.info(`push: deleting ${path}`);
           try {
             await this.storage.deleteFile(path);
-            delete this.localManifest.files[path];
+            this.localManifest.files[path] = {
+              hash: "",
+              mtime: Date.now(),
+              size: 0,
+              deleted: true,
+            };
           } catch (e: any) {
             this.log.error(`push: delete failed ${path}`, e);
             this.failedPaths.add(path);
