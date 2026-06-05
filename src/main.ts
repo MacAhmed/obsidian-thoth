@@ -136,6 +136,11 @@ export default class ThothPlugin extends Plugin {
 
   async loadSettings(): Promise<void> {
     this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
+    // Migrate old pollInterval (was minutes, now seconds)
+    if (this.settings.pollInterval < 10) {
+      this.settings.pollInterval = Math.max(10, this.settings.pollInterval * 60);
+      await this.saveData(this.settings);
+    }
   }
 
   async saveSettings(): Promise<void> {

@@ -218,17 +218,20 @@ export class SyncEngine {
     try {
       if (!remote) remote = await this.storage.getManifest();
 
-      // Ensure pending local files are in the manifest before computing actions
+      // Update manifest with pending local changes before computing actions
       for (const path of this.pendingChanges) {
-        if (this.localManifest.files[path]) continue;
         const file = this.vault.getAbstractFileByPath(path);
         if (file instanceof TFile) {
-          const { hash } = await this.readAndHash(file);
-          this.localManifest.files[path] = {
-            hash,
-            mtime: file.stat.mtime,
-            size: file.stat.size,
-          };
+          const existing = this.localManifest.files[path];
+          // Re-hash if new or if mtime changed (file was modified)
+          if (!existing || existing.mtime !== file.stat.mtime || existing.size !== file.stat.size) {
+            const { hash } = await this.readAndHash(file);
+            this.localManifest.files[path] = {
+              hash,
+              mtime: file.stat.mtime,
+              size: file.stat.size,
+            };
+          }
         }
       }
 
@@ -358,13 +361,15 @@ export class SyncEngine {
         const { path, entry } = action as { type: "conflict"; path: string; entry: FileEntry };
         const isMarkdown = path.endsWith(".md");
         const baseHash = this.history.files[path]?.hash;
+        let remoteData: ArrayBuffer | null = null;
 
         if (isMarkdown && this.mergeStrategy === "auto-merge" && baseHash) {
           try {
-            const [remoteData, baseData] = await Promise.all([
+            const [rd, baseData] = await Promise.all([
               this.storage.getFile(path),
               this.storage.getBlob(baseHash),
             ]);
+            remoteData = rd;
 
             if (remoteData && baseData) {
               const decoder = new TextDecoder();
@@ -408,7 +413,7 @@ export class SyncEngine {
 
         // Fallback: create conflict file
         try {
-          const data = await this.storage.getFile(path);
+          const data = remoteData || await this.storage.getFile(path);
           if (!data) continue;
           const ext = path.lastIndexOf(".") > -1 ? path.slice(path.lastIndexOf(".")) : "";
           const stem = path.slice(0, path.length - ext.length);
