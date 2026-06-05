@@ -9,7 +9,7 @@ import { ThothSettings, ThothSettingTab, DEFAULT_SETTINGS } from "./settings";
 export default class ThothPlugin extends Plugin {
   settings: ThothSettings = DEFAULT_SETTINGS;
   private syncEngine: SyncEngine | null = null;
-  private pollInterval: ReturnType<typeof setInterval> | null = null;
+  private pollInterval: number | null = null;
   private logger!: Logger;
 
   async onload(): Promise<void> {
@@ -20,21 +20,21 @@ export default class ThothPlugin extends Plugin {
     this.addCommand({
       id: "thoth-force-push",
       name: "Push changes now",
-      callback: () => this.syncEngine?.push(),
+      callback: () => { void this.syncEngine?.push(); },
     });
 
     this.addCommand({
       id: "thoth-force-pull",
       name: "Pull changes now",
-      callback: () => this.syncEngine?.pull(),
+      callback: () => { void this.syncEngine?.pull(); },
     });
 
     this.addRibbonIcon("upload-cloud", "Thoth: Push", () => {
-      this.syncEngine?.push();
+      void this.syncEngine?.push();
     });
 
     this.addRibbonIcon("download-cloud", "Thoth: Pull", () => {
-      this.syncEngine?.pull();
+      void this.syncEngine?.pull();
     });
 
     if (this.isConfigured()) {
@@ -69,6 +69,7 @@ export default class ThothPlugin extends Plugin {
     await history.load();
     this.syncEngine = new SyncEngine(
       this.app.vault,
+      this.app.fileManager,
       storage,
       history,
       this.settings.deviceId,
@@ -102,8 +103,8 @@ export default class ThothPlugin extends Plugin {
       })
     );
 
-    this.pollInterval = setInterval(
-      () => this.syncEngine?.pull(),
+    this.pollInterval = window.setInterval(
+      () => { void this.syncEngine?.pull(); },
       this.settings.pollInterval * 1000
     );
 
@@ -111,8 +112,8 @@ export default class ThothPlugin extends Plugin {
   }
 
   private stopSync(): void {
-    if (this.pollInterval) {
-      clearInterval(this.pollInterval);
+    if (this.pollInterval !== null) {
+      window.clearInterval(this.pollInterval);
       this.pollInterval = null;
     }
     this.syncEngine = null;

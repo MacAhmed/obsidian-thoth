@@ -1,6 +1,15 @@
-import { App, Modal, PluginSettingTab, Setting, Notice } from "obsidian";
+import { App, Modal, PluginSettingTab, Setting, Notice, sanitizeHTMLToDom } from "obsidian";
 import QRCode from "qrcode-generator";
 import type ThothPlugin from "./main";
+
+interface SettingsPayload {
+  e: string;
+  r: string;
+  a: string;
+  s: string;
+  b: string;
+  p: number;
+}
 
 export interface ThothSettings {
   endpoint: string;
@@ -36,7 +45,7 @@ export class ThothSettingTab extends PluginSettingTab {
     const { containerEl } = this;
     containerEl.empty();
 
-    containerEl.createEl("h2", { text: "Thoth Sync" });
+    new Setting(containerEl).setName("Thoth Sync").setHeading();
 
     new Setting(containerEl)
       .setName("Endpoint URL")
@@ -106,9 +115,10 @@ export class ThothSettingTab extends PluginSettingTab {
       .setName("Save & Connect")
       .setDesc("Save settings and start syncing")
       .addButton((btn) =>
-        btn.setButtonText("Save").setCta().onClick(async () => {
-          await this.plugin.saveSettings();
-          new Notice("Settings saved");
+        btn.setButtonText("Save").setCta().onClick(() => {
+          void this.plugin.saveSettings().then(() => {
+            new Notice("Settings saved");
+          });
         })
       );
 
@@ -120,9 +130,9 @@ export class ThothSettingTab extends PluginSettingTab {
           .addOption("auto-merge", "Auto-merge (recommended)")
           .addOption("conflict-file", "Create conflict file")
           .setValue(this.plugin.settings.mergeStrategy)
-          .onChange(async (value) => {
+          .onChange((value) => {
             this.plugin.settings.mergeStrategy = value as "auto-merge" | "conflict-file";
-            await this.plugin.saveSettings();
+            void this.plugin.saveSettings();
           })
       );
 
@@ -130,15 +140,16 @@ export class ThothSettingTab extends PluginSettingTab {
       .setName("Test connection")
       .setDesc("Writes, reads, and deletes a test file in the bucket")
       .addButton((btn) =>
-        btn.setButtonText("Test").onClick(async () => {
+        btn.setButtonText("Test").onClick(() => {
           btn.setButtonText("Testing...");
-          const result = await this.plugin.testConnection();
-          btn.setButtonText(result.ok ? "✓ Connected" : `✗ ${result.error}`);
-          setTimeout(() => btn.setButtonText("Test"), 5000);
+          void this.plugin.testConnection().then((result) => {
+            btn.setButtonText(result.ok ? "✓ Connected" : `✗ ${result.error}`);
+            window.setTimeout(() => btn.setButtonText("Test"), 5000);
+          });
         })
       );
 
-    containerEl.createEl("h3", { text: "Transfer settings" });
+    new Setting(containerEl).setName("Transfer settings").setHeading();
 
     new Setting(containerEl)
       .setName("Export as QR code")
@@ -162,10 +173,11 @@ export class ThothSettingTab extends PluginSettingTab {
       .setName("Copy settings string")
       .setDesc("Copy encoded settings to clipboard for manual transfer")
       .addButton((btn) =>
-        btn.setButtonText("Copy").onClick(async () => {
+        btn.setButtonText("Copy").onClick(() => {
           const encoded = encodeSettings(this.plugin.settings);
-          await navigator.clipboard.writeText(encoded);
-          new Notice("Settings copied to clipboard");
+          void navigator.clipboard.writeText(encoded).then(() => {
+            new Notice("Settings copied to clipboard");
+          });
         })
       );
   }
@@ -185,7 +197,7 @@ export function encodeSettings(settings: ThothSettings): string {
 
 export function decodeSettings(encoded: string): Partial<ThothSettings> | null {
   try {
-    const payload = JSON.parse(atob(encoded.trim()));
+    const payload = JSON.parse(atob(encoded.trim())) as SettingsPayload;
     return {
       endpoint: payload.e,
       region: payload.r,
@@ -223,9 +235,7 @@ class QRModal extends Modal {
 
     const svg = qr.createSvgTag({ scalable: true });
     const container = contentEl.createDiv({ cls: "thoth-qr-container" });
-    container.innerHTML = svg;
-    container.style.maxWidth = "300px";
-    container.style.margin = "1em auto";
+    container.append(sanitizeHTMLToDom(svg));
   }
 
   onClose(): void {
@@ -248,21 +258,23 @@ class ImportModal extends Modal {
     contentEl.createEl("p", { text: "Paste the settings string from your other device:" });
 
     const input = contentEl.createEl("textarea", {
-      attr: { rows: "4", style: "width: 100%; font-family: monospace; font-size: 12px;" },
+      cls: "thoth-import-input",
+      attr: { rows: "4" },
     });
 
     new Setting(contentEl)
       .addButton((btn) =>
-        btn.setButtonText("Import").setCta().onClick(async () => {
+        btn.setButtonText("Import").setCta().onClick(() => {
           const decoded = decodeSettings(input.value);
           if (!decoded) {
             new Notice("Invalid settings string");
             return;
           }
           Object.assign(this.plugin.settings, decoded);
-          await this.plugin.saveSettings();
-          new Notice("Settings imported — restart plugin to connect");
-          this.close();
+          void this.plugin.saveSettings().then(() => {
+            new Notice("Settings imported — restart plugin to connect");
+            this.close();
+          });
         })
       );
   }

@@ -1,8 +1,15 @@
 import { Vault, TFile } from "obsidian";
+import type { FileManager } from "obsidian";
 import { Storage, Manifest, FileEntry } from "./storage";
 import { History } from "./history";
 import { Logger } from "./logger";
 import { threeWayMerge } from "./merge";
+
+interface SyncError {
+  name: string;
+  message: string;
+  $metadata?: Record<string, unknown>;
+}
 
 export type Action =
   | { type: "push"; path: string }
@@ -106,6 +113,7 @@ export function computeActions(
 
 export class SyncEngine {
   private vault: Vault;
+  private fileManager: FileManager;
   private storage: Storage;
   private history: History;
   private log: Logger;
@@ -115,12 +123,13 @@ export class SyncEngine {
   private pendingChanges: Set<string> = new Set();
   private failedPaths: Set<string> = new Set();
   private pulledPaths: Set<string> = new Set();
-  private debounceTimer: ReturnType<typeof setTimeout> | null = null;
+  private debounceTimer: number | null = null;
   private syncing = false;
   private pulling = false;
 
-  constructor(vault: Vault, storage: Storage, history: History, deviceId: string, logger: Logger, mergeStrategy: "auto-merge" | "conflict-file") {
+  constructor(vault: Vault, fileManager: FileManager, storage: Storage, history: History, deviceId: string, logger: Logger, mergeStrategy: "auto-merge" | "conflict-file") {
     this.vault = vault;
+    this.fileManager = fileManager;
     this.storage = storage;
     this.history = history;
     this.deviceId = deviceId;
@@ -152,9 +161,10 @@ export class SyncEngine {
       } else {
         this.log.info("Nothing to sync — all empty");
       }
-    } catch (e: any) {
-      this.log.notice(`Thoth init failed: ${e.name}: ${e.message}`, 10000);
-      this.log.error("initialize() threw", e);
+    } catch (e: unknown) {
+      const err = e as SyncError;
+      this.log.notice(`Thoth init failed: ${err.name}: ${err.message}`, 10000);
+      this.log.error("initialize() threw", err);
     }
   }
 
@@ -180,9 +190,9 @@ export class SyncEngine {
             this.storage.putBlob(hash, content),
           ]);
           pushed++;
-        } catch (e: any) {
+        } catch (e: unknown) {
           failed++;
-          this.log.error(`pushAll: failed on ${path}`, e);
+          this.log.error(`pushAll: failed on ${path}`, e as SyncError);
         }
       }));
 
@@ -238,10 +248,10 @@ export class SyncEngine {
 
       actions = this.computeActions(remote);
       const pushes = actions.filter(a => a.type === "push");
-      const pulls = actions.filter(a => a.type === "pull");
+      const pulls = actions.filter(a => a.type === "pull") as { type: "pull"; path: string; entry: FileEntry }[];
       const deleteLocals = actions.filter(a => a.type === "deleteLocal");
       const deleteRemotes = actions.filter(a => a.type === "deleteRemote");
-      const conflicts = actions.filter(a => a.type === "conflict");
+      const conflicts = actions.filter(a => a.type === "conflict") as { type: "conflict"; path: string; entry: FileEntry }[];
 
       this.log.info(`sync: ${pushes.length} push, ${pulls.length} pull, ${deleteLocals.length} deleteLocal, ${deleteRemotes.length} deleteRemote, ${conflicts.length} conflicts`);
 
@@ -255,7 +265,7 @@ export class SyncEngine {
       for (const a of pulls) {
         const local = this.localManifest.files[a.path];
         const prev = this.history.files[a.path];
-        this.log.info(`sync: pull ${a.path} | local=${local ? `hash=${local.hash?.slice(0, 8)}` : "MISSING"} prev=${prev ? `hash=${prev.hash?.slice(0, 8)}` : "MISSING"} remote.hash=${(a as any).entry?.hash?.slice(0, 8)}`);
+        this.log.info(`sync: pull ${a.path} | local=${local ? `hash=${local.hash?.slice(0, 8)}` : "MISSING"} prev=${prev ? `hash=${prev.hash?.slice(0, 8)}` : "MISSING"} remote.hash=${a.entry.hash?.slice(0, 8)}`);
       }
 
       if (actions.length === 0) {
@@ -267,13 +277,13 @@ export class SyncEngine {
 
       // Pull files (parallel download, sequential write)
       for (let i = 0; i < pulls.length; i += CONCURRENCY) {
-        const batch = pulls.slice(i, i + CONCURRENCY) as { type: "pull"; path: string; entry: FileEntry }[];
+        const batch = pulls.slice(i, i + CONCURRENCY);
         const results = await Promise.all(
           batch.map(async ({ path }) => {
             try {
               return { path, data: await this.storage.getFile(path) };
-            } catch (e: any) {
-              this.log.error(`sync: download failed ${path}`, e);
+            } catch (e: unknown) {
+              this.log.error(`sync: download failed ${path}`, e as SyncError);
               return { path, data: null };
             }
           })
@@ -320,8 +330,8 @@ export class SyncEngine {
               this.storage.putFile(path, content),
               this.storage.putBlob(hash, content),
             ]);
-          } catch (e: any) {
-            this.log.error(`sync: upload failed ${path}`, e);
+          } catch (e: unknown) {
+            this.log.error(`sync: upload failed ${path}`, e as SyncError);
           }
         }));
       }
@@ -334,7 +344,7 @@ export class SyncEngine {
         }
         const file = this.vault.getAbstractFileByPath(path);
         if (file instanceof TFile) {
-          await this.vault.delete(file);
+          await this.fileManager.trashFile(file);
           this.log.info(`sync: deleted local ${path}`);
         }
         this.localManifest.files[path] = {
@@ -358,8 +368,7 @@ export class SyncEngine {
       }
 
       // Handle conflicts — attempt three-way merge for markdown, fall back to conflict file
-      for (const action of conflicts) {
-        const { path, entry } = action as { type: "conflict"; path: string; entry: FileEntry };
+      for (const { path } of conflicts) {
         const isMarkdown = path.endsWith(".md");
         const baseHash = this.history.files[path]?.hash;
         let remoteData: ArrayBuffer | null = null;
@@ -406,8 +415,8 @@ export class SyncEngine {
 
             this.log.info(`sync: merge failed for ${path}, falling back to conflict file`);
             this.log.notice(`Thoth: merge failed for ${path}, created conflict file`);
-          } catch (e: any) {
-            this.log.error(`sync: merge error for ${path}`, e);
+          } catch (e: unknown) {
+            this.log.error(`sync: merge error for ${path}`, e as SyncError);
             this.log.notice(`Thoth: merge failed for ${path}, created conflict file`);
           }
         }
@@ -422,8 +431,8 @@ export class SyncEngine {
           await this.ensureFolder(conflictPath);
           await this.vault.createBinary(conflictPath, data);
           this.log.info(`sync: conflict saved as ${conflictPath}`);
-        } catch (e: any) {
-          this.log.error(`sync: conflict download failed ${path}`, e);
+        } catch (e: unknown) {
+          this.log.error(`sync: conflict download failed ${path}`, e as SyncError);
         }
       }
 
@@ -437,9 +446,10 @@ export class SyncEngine {
       if (total > 0) {
         this.log.notice(`Thoth: synced — ↑${pushes.length} ↓${pulls.length} 🗑${deleteLocals.length + deleteRemotes.length} ⚠${conflicts.length}`);
       }
-    } catch (e: any) {
-      this.log.notice(`Thoth sync failed: ${e.name}: ${e.message}`, 10000);
-      this.log.error("sync() threw", e);
+    } catch (e: unknown) {
+      const err = e as SyncError;
+      this.log.notice(`Thoth sync failed: ${err.name}: ${err.message}`, 10000);
+      this.log.error("sync() threw", err);
     } finally {
       this.pulling = false;
       this.syncing = false;
@@ -451,7 +461,6 @@ export class SyncEngine {
     }
   }
 
-  // Alias for external callers
   async pull(): Promise<void> {
     await this.sync(null);
   }
@@ -471,8 +480,8 @@ export class SyncEngine {
         if (this.pendingChanges.size > 0) this.schedulePush();
         return;
       }
-    } catch (e: any) {
-      this.log.error("push: pull-before-push failed, continuing", e);
+    } catch (e: unknown) {
+      this.log.error("push: pull-before-push failed, continuing", e as SyncError);
     }
 
     for (const path of this.failedPaths) this.pendingChanges.add(path);
@@ -497,8 +506,8 @@ export class SyncEngine {
               size: 0,
               deleted: true,
             };
-          } catch (e: any) {
-            this.log.error(`push: delete failed ${path}`, e);
+          } catch (e: unknown) {
+            this.log.error(`push: delete failed ${path}`, e as SyncError);
             this.failedPaths.add(path);
           }
           continue;
@@ -517,8 +526,8 @@ export class SyncEngine {
             size: file.stat.size,
           };
           pushed++;
-        } catch (e: any) {
-          this.log.error(`push: failed ${path}`, e);
+        } catch (e: unknown) {
+          this.log.error(`push: failed ${path}`, e as SyncError);
           this.failedPaths.add(path);
         }
       }
@@ -530,9 +539,10 @@ export class SyncEngine {
         await this.history.record(this.localManifest.files);
       }
       this.log.info(`push: done, ${pushed}/${changes.length} succeeded`);
-    } catch (e: any) {
-      this.log.notice(`Thoth push failed: ${e.name}: ${e.message}`, 10000);
-      this.log.error("push() threw", e);
+    } catch (e: unknown) {
+      const err = e as SyncError;
+      this.log.notice(`Thoth push failed: ${err.name}: ${err.message}`, 10000);
+      this.log.error("push() threw", err);
     } finally {
       this.syncing = false;
       if (this.pendingChanges.size > 0 || this.failedPaths.size > 0) {
@@ -624,7 +634,7 @@ export class SyncEngine {
   }
 
   private schedulePush(): void {
-    if (this.debounceTimer) clearTimeout(this.debounceTimer);
-    this.debounceTimer = setTimeout(() => this.push(), 2000);
+    if (this.debounceTimer !== null) window.clearTimeout(this.debounceTimer);
+    this.debounceTimer = window.setTimeout(() => { void this.push(); }, 2000);
   }
 }

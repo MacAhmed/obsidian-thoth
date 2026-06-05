@@ -1,0 +1,10 @@
+.thoth-qr-container {
+  max-width: 300px;
+  margin: 1em auto;
+}
+
+.thoth-import-input {
+  width: 100%;
+  font-family: monospace;
+  font-size: 12px;
+}

@@ -6,6 +6,12 @@ import {
 } from "@aws-sdk/client-s3";
 import type { StorageBackend } from "../storage";
 
+interface S3Error {
+  name: string;
+  message: string;
+  $metadata?: { httpStatusCode?: number };
+}
+
 export interface S3Config {
   endpoint: string;
   region: string;
@@ -52,8 +58,9 @@ export class S3Backend implements StorageBackend {
       );
       const bytes = await res.Body?.transformToByteArray();
       return bytes ? (bytes.buffer as ArrayBuffer) : null;
-    } catch (e: any) {
-      if (e.name === "NoSuchKey" || e.$metadata?.httpStatusCode === 404) {
+    } catch (e: unknown) {
+      const err = e as S3Error;
+      if (err.name === "NoSuchKey" || err.$metadata?.httpStatusCode === 404) {
         return null;
       }
       throw e;
@@ -78,8 +85,9 @@ export class S3Backend implements StorageBackend {
 
       await this.delete("_thoth/test.json");
       return { ok: true };
-    } catch (e: any) {
-      return { ok: false, error: e.name || e.message };
+    } catch (e: unknown) {
+      const err = e as S3Error;
+      return { ok: false, error: err.name || err.message };
     }
   }
 }

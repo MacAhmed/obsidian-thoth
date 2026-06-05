@@ -6,7 +6,7 @@ const MAX_LINES = 500;
 export class Logger {
   private vault: Vault;
   private buffer: string[] = [];
-  private flushTimer: ReturnType<typeof setTimeout> | null = null;
+  private flushTimer: number | null = null;
 
   constructor(vault: Vault) {
     this.vault = vault;
@@ -17,7 +17,7 @@ export class Logger {
     console.log(`[thoth] ${msg}`);
   }
 
-  error(msg: string, err?: any): void {
+  error(msg: string, err?: { name?: string; message?: string; $metadata?: Record<string, unknown> }): void {
     this.write("ERROR", msg);
     if (err) {
       this.write("ERROR", `  name=${err.name} message=${err.message}`);
@@ -38,8 +38,8 @@ export class Logger {
   }
 
   private scheduleFlush(): void {
-    if (this.flushTimer) return;
-    this.flushTimer = setTimeout(() => this.flush(), 1000);
+    if (this.flushTimer !== null) return;
+    this.flushTimer = window.setTimeout(() => { void this.flush(); }, 1000);
   }
 
   private async flush(): Promise<void> {
