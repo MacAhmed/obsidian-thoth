@@ -315,8 +315,12 @@ export class SyncEngine {
         }));
       }
 
-      // Delete local files
+      // Delete local files (skip if user has pending changes)
       for (const { path } of deleteLocals) {
+        if (this.pendingChanges.has(path)) {
+          this.log.info(`sync: skipping deleteLocal ${path} — has pending changes`);
+          continue;
+        }
         const file = this.vault.getAbstractFileByPath(path);
         if (file instanceof TFile) {
           await this.vault.delete(file);
