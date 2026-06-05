@@ -50,7 +50,7 @@ export class Storage {
     const data = await this.backend.get("_thoth/manifest.json");
     if (!data) return null;
     const text = new TextDecoder().decode(data);
-    return JSON.parse(text);
+    return JSON.parse(text) as Manifest;
   }
 
   async putManifest(manifest: Manifest): Promise<void> {

@@ -45,7 +45,7 @@ export class ThothSettingTab extends PluginSettingTab {
     const { containerEl } = this;
     containerEl.empty();
 
-    new Setting(containerEl).setName("Thoth Sync").setHeading();
+    new Setting(containerEl).setName("Connection").setHeading();
 
     new Setting(containerEl)
       .setName("Endpoint URL")
@@ -142,14 +142,14 @@ export class ThothSettingTab extends PluginSettingTab {
       .addButton((btn) =>
         btn.setButtonText("Test").onClick(() => {
           btn.setButtonText("Testing...");
-          void this.plugin.testConnection().then((result) => {
+          void this.plugin.testConnection().then((result): void => {
             btn.setButtonText(result.ok ? "✓ Connected" : `✗ ${result.error}`);
-            window.setTimeout(() => btn.setButtonText("Test"), 5000);
+            window.setTimeout(() => { btn.setButtonText("Test"); }, 5000);
           });
         })
       );
 
-    new Setting(containerEl).setName("Transfer settings").setHeading();
+    new Setting(containerEl).setName("Transfer").setHeading();
 
     new Setting(containerEl)
       .setName("Export as QR code")

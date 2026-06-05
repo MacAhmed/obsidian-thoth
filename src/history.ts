@@ -23,7 +23,7 @@ export class History {
       const file = this.vault.getAbstractFileByPath(HISTORY_PATH);
       if (!(file instanceof TFile)) return;
       const text = await this.vault.read(file);
-      this.data = JSON.parse(text);
+      this.data = JSON.parse(text) as SyncHistory;
     } catch {
       // Missing or corrupt — start fresh
     }
