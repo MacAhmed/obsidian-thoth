@@ -234,6 +234,19 @@ export class SyncEngine {
 
       this.log.info(`sync: ${pushes.length} push, ${pulls.length} pull, ${deleteLocals.length} deleteLocal, ${deleteRemotes.length} deleteRemote, ${conflicts.length} conflicts`);
 
+      for (const a of deleteLocals) {
+        const local = this.localManifest.files[a.path];
+        const prev = this.history.files[a.path];
+        const rem = remote?.files?.[a.path];
+        this.log.info(`sync: deleteLocal ${a.path} | local.hash=${local?.hash?.slice(0, 8)} prev.hash=${prev?.hash?.slice(0, 8)} remote=${rem ? `hash=${rem.hash?.slice(0, 8)} deleted=${rem.deleted}` : "MISSING"} | pending=${this.pendingChanges.has(a.path)}`);
+      }
+
+      for (const a of pulls) {
+        const local = this.localManifest.files[a.path];
+        const prev = this.history.files[a.path];
+        this.log.info(`sync: pull ${a.path} | local=${local ? `hash=${local.hash?.slice(0, 8)}` : "MISSING"} prev=${prev ? `hash=${prev.hash?.slice(0, 8)}` : "MISSING"} remote.hash=${(a as any).entry?.hash?.slice(0, 8)}`);
+      }
+
       if (actions.length === 0) {
         this.log.info("sync: nothing to do");
         return;
