@@ -217,6 +217,7 @@ export class SyncEngine {
     let actions: Action[] = [];
     try {
       if (!remote) remote = await this.storage.getManifest();
+      this.log.info(`sync: remote manifest has ${remote ? Object.keys(remote.files).length : 0} files, deviceId=${remote?.deviceId || "none"}`);
 
       // Update manifest with pending local changes before computing actions
       for (const path of this.pendingChanges) {
