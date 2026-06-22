@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { computeActions } from "../src/sync";
+import { computeActions, ComputeOptions } from "../src/sync";
 import type { FileEntry } from "../src/storage";
 
 function entry(hash: string, mtime = 1000): FileEntry {
@@ -171,5 +171,67 @@ describe("computeActions", () => {
     const actions = computeActions(local, remote, {});
     const types = actions.map(a => `${a.type}:${a.path}`).sort();
     expect(types).toEqual(["deleteRemote:old.md", "push:new.md"]);
+  });
+
+  it("deletes local when remote is newer from another device and file absent from remote", () => {
+    const prev = { "old.md": entry("aaa") };
+    const local = { "old.md": entry("aaa") };
+    const remote = {};
+    const opts: ComputeOptions = {
+      remoteUpdatedAt: 5000,
+      lastSyncedAt: 3000,
+      remoteDeviceId: "desktop",
+      localDeviceId: "mobile",
+    };
+    const actions = computeActions(local, remote, prev, opts);
+    expect(actions).toEqual([{ type: "deleteLocal", path: "old.md" }]);
+  });
+
+  it("pushes when remote is older (file absent = race, not deletion)", () => {
+    const prev = { "a.md": entry("aaa") };
+    const local = { "a.md": entry("aaa") };
+    const remote = {};
+    const opts: ComputeOptions = {
+      remoteUpdatedAt: 2000,
+      lastSyncedAt: 3000,
+      remoteDeviceId: "desktop",
+      localDeviceId: "mobile",
+    };
+    const actions = computeActions(local, remote, prev, opts);
+    expect(actions).toEqual([{ type: "push", path: "a.md" }]);
+  });
+
+  it("pushes when remote is newer but same device (local changes not yet pushed)", () => {
+    const prev = { "a.md": entry("aaa") };
+    const local = { "a.md": entry("aaa") };
+    const remote = {};
+    const opts: ComputeOptions = {
+      remoteUpdatedAt: 5000,
+      lastSyncedAt: 3000,
+      remoteDeviceId: "mobile",
+      localDeviceId: "mobile",
+    };
+    const actions = computeActions(local, remote, prev, opts);
+    expect(actions).toEqual([{ type: "push", path: "a.md" }]);
+  });
+
+  it("mobile receives bulk rename: deletes old paths, pulls new ones", () => {
+    const prev = { "old_1.md": entry("aaa"), "old_2.md": entry("bbb") };
+    const local = { "old_1.md": entry("aaa"), "old_2.md": entry("bbb") };
+    const remote = { "new_1.md": entry("aaa"), "new_2.md": entry("bbb") };
+    const opts: ComputeOptions = {
+      remoteUpdatedAt: 5000,
+      lastSyncedAt: 3000,
+      remoteDeviceId: "desktop",
+      localDeviceId: "mobile",
+    };
+    const actions = computeActions(local, remote, prev, opts);
+    const types = actions.map(a => `${a.type}:${a.path}`).sort();
+    expect(types).toEqual([
+      "deleteLocal:old_1.md",
+      "deleteLocal:old_2.md",
+      "pull:new_1.md",
+      "pull:new_2.md",
+    ]);
   });
 });

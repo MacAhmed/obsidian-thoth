@@ -18,11 +18,27 @@ export type Action =
   | { type: "deleteRemote"; path: string }
   | { type: "conflict"; path: string; entry: FileEntry };
 
+export interface ComputeOptions {
+  remoteUpdatedAt?: number;
+  lastSyncedAt?: number;
+  remoteDeviceId?: string;
+  localDeviceId?: string;
+}
+
 export function computeActions(
   localFiles: Record<string, FileEntry>,
   remoteFiles: Record<string, FileEntry>,
-  historyFiles: Record<string, FileEntry>
+  historyFiles: Record<string, FileEntry>,
+  options: ComputeOptions = {}
 ): Action[] {
+  const remoteIsNewer = !!(
+    options.remoteUpdatedAt &&
+    options.lastSyncedAt &&
+    options.remoteDeviceId &&
+    options.localDeviceId &&
+    options.remoteDeviceId !== options.localDeviceId &&
+    options.remoteUpdatedAt > options.lastSyncedAt
+  );
   const actions: Action[] = [];
 
   const allPaths = new Set([
@@ -66,10 +82,7 @@ export function computeActions(
     }
 
     if (localExists && prevExists && !remoteExists) {
-      // Only delete local if remote explicitly marked it deleted.
-      // Mere absence from the manifest means the other device hasn't
-      // seen this file yet (race) — push it instead of deleting.
-      if (remoteEntry?.deleted) {
+      if (remoteEntry?.deleted || remoteIsNewer) {
         if (local.hash === prev.hash) {
           actions.push({ type: "deleteLocal", path });
         } else {
@@ -215,7 +228,13 @@ export class SyncEngine {
     return computeActions(
       this.localManifest.files,
       remote?.files || {},
-      this.history.files
+      this.history.files,
+      {
+        remoteUpdatedAt: remote?.updatedAt,
+        lastSyncedAt: this.history.syncedAt,
+        remoteDeviceId: remote?.deviceId,
+        localDeviceId: this.deviceId,
+      }
     );
   }
 
@@ -476,7 +495,12 @@ export class SyncEngine {
     // Pull-before-push: incorporate remote changes before pushing ours
     try {
       const remote = await this.storage.getManifest();
-      const actions = computeActions(this.localManifest.files, remote?.files || {}, this.history.files);
+      const actions = computeActions(this.localManifest.files, remote?.files || {}, this.history.files, {
+        remoteUpdatedAt: remote?.updatedAt,
+        lastSyncedAt: this.history.syncedAt,
+        remoteDeviceId: remote?.deviceId,
+        localDeviceId: this.deviceId,
+      });
       const hasRemoteChanges = actions.some(a => a.type === "pull" || a.type === "deleteLocal" || a.type === "conflict");
       if (hasRemoteChanges) {
         this.syncing = false;
