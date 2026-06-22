@@ -48,7 +48,11 @@ export function computeActions(
     }
 
     if (!localExists && remoteExists && !prevExists) {
-      actions.push({ type: "pull", path, entry: remoteEntry });
+      if (local?.deleted) {
+        actions.push({ type: "deleteRemote", path });
+      } else {
+        actions.push({ type: "pull", path, entry: remoteEntry });
+      }
       continue;
     }
 
@@ -624,6 +628,12 @@ export class SyncEngine {
     if (this.pulling) return;
     if (this.pulledPaths.delete(path)) return;
     if (path.startsWith(".") || path.startsWith("_thoth")) return;
+    this.localManifest.files[path] = {
+      hash: "",
+      mtime: Date.now(),
+      size: 0,
+      deleted: true,
+    };
     this.pendingChanges.add(path);
     this.schedulePush();
   }

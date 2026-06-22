@@ -157,4 +157,19 @@ describe("computeActions", () => {
     const actions = computeActions(local, remote, prev);
     expect(actions).toEqual([{ type: "push", path: "a.md" }]);
   });
+
+  it("deletes remote when local explicitly deleted but no history (rename scenario)", () => {
+    const local = { "old.md": deleted("") };
+    const remote = { "old.md": entry("aaa") };
+    const actions = computeActions(local, remote, {});
+    expect(actions).toEqual([{ type: "deleteRemote", path: "old.md" }]);
+  });
+
+  it("handles rename as delete-old + push-new without pulling old back", () => {
+    const local = { "old.md": deleted(""), "new.md": entry("aaa") };
+    const remote = { "old.md": entry("aaa") };
+    const actions = computeActions(local, remote, {});
+    const types = actions.map(a => `${a.type}:${a.path}`).sort();
+    expect(types).toEqual(["deleteRemote:old.md", "push:new.md"]);
+  });
 });
