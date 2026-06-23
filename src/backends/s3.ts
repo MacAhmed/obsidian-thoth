@@ -3,6 +3,7 @@ import {
   PutObjectCommand,
   GetObjectCommand,
   DeleteObjectCommand,
+  ListObjectsV2Command,
 } from "@aws-sdk/client-s3";
 import type { StorageBackend } from "../storage";
 
@@ -71,6 +72,25 @@ export class S3Backend implements StorageBackend {
     await this.client.send(
       new DeleteObjectCommand({ Bucket: this.bucket, Key: key })
     );
+  }
+
+  async list(prefix: string): Promise<string[]> {
+    const keys: string[] = [];
+    let token: string | undefined;
+    do {
+      const res = await this.client.send(
+        new ListObjectsV2Command({
+          Bucket: this.bucket,
+          Prefix: prefix,
+          ContinuationToken: token,
+        })
+      );
+      for (const obj of res.Contents || []) {
+        if (obj.Key) keys.push(obj.Key);
+      }
+      token = res.IsTruncated ? res.NextContinuationToken : undefined;
+    } while (token);
+    return keys;
   }
 
   async test(): Promise<{ ok: boolean; error?: string }> {

@@ -16,6 +16,7 @@ export interface StorageBackend {
   put(key: string, data: ArrayBuffer): Promise<void>;
   get(key: string): Promise<ArrayBuffer | null>;
   delete(key: string): Promise<void>;
+  list(prefix: string): Promise<string[]>;
   test(): Promise<{ ok: boolean; error?: string }>;
 }
 
@@ -56,6 +57,18 @@ export class Storage {
   async putManifest(manifest: Manifest): Promise<void> {
     const data = new TextEncoder().encode(JSON.stringify(manifest));
     await this.backend.put("_thoth/manifest.json", data.buffer);
+  }
+
+  async deleteAll(): Promise<number> {
+    const keys = await this.backend.list("");
+    const CONCURRENCY = 50;
+    let deleted = 0;
+    for (let i = 0; i < keys.length; i += CONCURRENCY) {
+      const batch = keys.slice(i, i + CONCURRENCY);
+      await Promise.all(batch.map(k => this.backend.delete(k)));
+      deleted += batch.length;
+    }
+    return deleted;
   }
 
   async testConnection(): Promise<{ ok: boolean; error?: string }> {

@@ -488,6 +488,98 @@ export class SyncEngine {
     await this.sync(null);
   }
 
+  async forceReset(): Promise<void> {
+    if (this.syncing) {
+      this.log.notice("Thoth: can't reset while sync is in progress");
+      return;
+    }
+    this.syncing = true;
+    this.log.notice("Thoth: force reset — wiping remote and pushing local state");
+
+    try {
+      const deleted = await this.storage.deleteAll();
+      this.log.info(`forceReset: deleted ${deleted} remote objects`);
+
+      this.localManifest = {
+        version: 1,
+        deviceId: this.deviceId,
+        updatedAt: Date.now(),
+        files: {},
+      };
+      await this.buildLocalManifest();
+      await this.pushAll();
+      this.log.notice("Thoth: force reset complete — remote now matches local");
+    } catch (e: unknown) {
+      const err = e as SyncError;
+      this.log.notice(`Thoth force reset failed: ${err.name}: ${err.message}`, 10000);
+      this.log.error("forceReset() threw", err);
+    } finally {
+      this.syncing = false;
+    }
+  }
+
+  async forcePull(): Promise<void> {
+    if (this.syncing) {
+      this.log.notice("Thoth: can't force pull while sync is in progress");
+      return;
+    }
+    this.syncing = true;
+    this.pulling = true;
+    this.log.notice("Thoth: force pull — replacing local with remote state");
+
+    try {
+      const remote = await this.storage.getManifest();
+      if (!remote) {
+        this.log.notice("Thoth: no remote manifest found — nothing to pull");
+        return;
+      }
+
+      const localFiles = this.vault.getFiles();
+      for (const file of localFiles) {
+        if (file.path.startsWith(".") || file.path.startsWith("_thoth")) continue;
+        await this.fileManager.trashFile(file);
+      }
+      this.log.info(`forcePull: trashed ${localFiles.length} local files`);
+
+      const remotePaths = Object.entries(remote.files)
+        .filter(([, e]) => !e.deleted)
+        .map(([p]) => p);
+
+      const CONCURRENCY = 20;
+      let pulled = 0;
+      for (let i = 0; i < remotePaths.length; i += CONCURRENCY) {
+        const batch = remotePaths.slice(i, i + CONCURRENCY);
+        const results = await Promise.all(
+          batch.map(async (path) => {
+            try {
+              return { path, data: await this.storage.getFile(path) };
+            } catch {
+              return { path, data: null };
+            }
+          })
+        );
+        for (const { path, data } of results) {
+          if (!data) continue;
+          await this.ensureFolder(path);
+          await this.vault.createBinary(path, data);
+          pulled++;
+        }
+      }
+
+      this.localManifest = remote;
+      this.localManifest.deviceId = this.deviceId;
+      await this.history.record(this.localManifest.files);
+      this.log.notice(`Thoth: force pull complete — pulled ${pulled} files`);
+    } catch (e: unknown) {
+      const err = e as SyncError;
+      this.log.notice(`Thoth force pull failed: ${err.name}: ${err.message}`, 10000);
+      this.log.error("forcePull() threw", err);
+    } finally {
+      this.pulling = false;
+      this.syncing = false;
+    }
+  }
+
   async push(): Promise<void> {
     if (this.syncing || this.pendingChanges.size === 0) return;
     this.syncing = true;

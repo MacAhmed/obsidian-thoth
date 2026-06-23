@@ -29,6 +29,18 @@ export default class ThothPlugin extends Plugin {
       callback: () => { void this.syncEngine?.pull(); },
     });
 
+    this.addCommand({
+      id: "thoth-force-reset",
+      name: "Force reset: wipe remote, push local",
+      callback: () => { void this.syncEngine?.forceReset(); },
+    });
+
+    this.addCommand({
+      id: "thoth-force-pull-reset",
+      name: "Force pull: delete local, pull remote",
+      callback: () => { void this.syncEngine?.forcePull(); },
+    });
+
     this.addRibbonIcon("upload-cloud", "Thoth: Push", () => {
       void this.syncEngine?.push();
     });
