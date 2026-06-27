@@ -142,10 +142,18 @@ export default class ThothPlugin extends Plugin {
       backend,
       vault: adapter,
       deviceId: this.settings.deviceId,
+      logger: this.logger,
     });
 
     await this.loadState();
-    await this.engine.initialize();
+    try {
+      await this.engine.initialize();
+    } catch (e: unknown) {
+      const err = e as { name?: string; message?: string };
+      this.logger.notice(`Thoth init failed: ${err.name}: ${err.message}`, 10000);
+      this.logger.error("initialize() threw", err);
+      return;
+    }
     await this.saveState();
 
     this.registerEvent(
@@ -183,11 +191,16 @@ export default class ThothPlugin extends Plugin {
     );
 
     this.pollInterval = window.setInterval(
-      () => { void this.engine?.pull(); },
+      () => {
+        void this.engine?.pull().catch((e: unknown) => {
+          const err = e as { name?: string; message?: string };
+          this.logger.error(`poll failed: ${err.name}: ${err.message}`, err);
+        });
+      },
       this.settings.pollInterval * 1000
     );
 
-    this.logger.notice("Thoth: sync started (V2)");
+    this.logger.notice("Thoth: sync active");
   }
 
   private stopSync(): void {
@@ -205,8 +218,13 @@ export default class ThothPlugin extends Plugin {
   private schedulePush(): void {
     if (this.debounceTimer !== null) window.clearTimeout(this.debounceTimer);
     this.debounceTimer = window.setTimeout(async () => {
-      await this.engine?.flush();
-      await this.saveState();
+      try {
+        await this.engine?.flush();
+        await this.saveState();
+      } catch (e: unknown) {
+        const err = e as { name?: string; message?: string };
+        this.logger.error(`flush failed: ${err.name}: ${err.message}`, err);
+      }
     }, 2000);
   }
 

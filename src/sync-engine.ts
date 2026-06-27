@@ -13,10 +13,23 @@ export interface VaultAdapter {
   ensureFolder(path: string): void | Promise<void>;
 }
 
+export interface EngineLogger {
+  info(msg: string): void;
+  error(msg: string, err?: unknown): void;
+  notice(msg: string, duration?: number): void;
+}
+
+const nullLogger: EngineLogger = {
+  info: () => {},
+  error: () => {},
+  notice: () => {},
+};
+
 export interface SyncEngineV2Config {
   backend: StorageBackend;
   vault: VaultAdapter;
   deviceId: string;
+  logger?: EngineLogger;
 }
 
 export class SyncEngineV2 {
@@ -25,11 +38,13 @@ export class SyncEngineV2 {
   private deviceId: string;
   private state: LocalState;
   private knownHashes = new Set<string>();
+  private log: EngineLogger;
 
   constructor(config: SyncEngineV2Config) {
     this.opStorage = new OpStorage(config.backend);
     this.vault = config.vault;
     this.deviceId = config.deviceId;
+    this.log = config.logger ?? nullLogger;
     this.state = {
       version: 2,
       deviceId: config.deviceId,
@@ -55,25 +70,32 @@ export class SyncEngineV2 {
   }
 
   async initialize(): Promise<void> {
+    this.log.info(`initialize: deviceId=${this.deviceId} localFiles=${this.vault.getFiles().length} lastSeq=${this.state.lastSeq}`);
     const headResult = await this.opStorage.getHead();
     const localFiles = this.vault.getFiles();
 
     if (!headResult) {
       if (localFiles.length === 0) {
+        this.log.info("initialize: case 1 — empty remote + empty vault");
         await this.opStorage.writeHead({ version: 2, seq: 0, chunk: "" }, null);
         return;
       }
+      this.log.info(`initialize: case 2 — empty remote, ${localFiles.length} local files → writing checkpoint`);
       await this.initFromLocalVault(localFiles);
+      this.log.notice(`Thoth: initial push complete — ${localFiles.length} files`);
       return;
     }
 
     if (localFiles.length === 0) {
+      this.log.info(`initialize: case 3 — remote at seq ${headResult.head.seq}, empty vault → pulling`);
       await this.initFromRemote();
+      this.log.notice(`Thoth: pulled ${this.vault.getFiles().length} files from remote`);
       return;
     }
 
-    // Remote exists and local has files — reconcile by hash matching (cases 4, 5, 6)
+    this.log.info(`initialize: reconcile — remote seq=${headResult.head.seq} local=${localFiles.length} files lastSeq=${this.state.lastSeq}`);
     await this.reconcile(localFiles, headResult.head.seq);
+    this.log.info(`initialize: reconcile done — registry=${Object.keys(this.state.registry).length} outbox=${this.state.outbox.length}`);
   }
 
   private async reconcile(
@@ -434,6 +456,7 @@ export class SyncEngineV2 {
 
   async flush(): Promise<void> {
     if (this.state.outbox.length === 0) return;
+    this.log.info(`flush: ${this.state.outbox.length} ops in outbox, lastSeq=${this.state.lastSeq}`);
 
     let headResult = await this.opStorage.getHead();
 
@@ -511,6 +534,7 @@ export class SyncEngineV2 {
 
     this.state.lastSeq = newSeq;
     this.state.outbox = [];
+    this.log.info(`flush: done, lastSeq=${this.state.lastSeq}`);
   }
 
   async pull(): Promise<void> {
@@ -519,10 +543,10 @@ export class SyncEngineV2 {
 
     const remoteSeq = headResult.head.seq;
 
-    // Remote seq went backwards — remote was reset. Drop our local seq tracking
-    // so we can re-sync, but never auto-delete local files. User must run
-    // force pull explicitly if they want local replaced.
+    // Remote seq went backwards — remote was reset. Drop local seq tracking
+    // but never auto-delete files. User runs force pull to replace content.
     if (remoteSeq < this.state.lastSeq) {
+      this.log.info(`pull: remote reset detected (remoteSeq=${remoteSeq} < lastSeq=${this.state.lastSeq}) — re-reconciling`);
       this.state.lastSeq = 0;
       this.state.registry = {};
       this.knownHashes.clear();
@@ -533,7 +557,9 @@ export class SyncEngineV2 {
     if (remoteSeq <= this.state.lastSeq) return;
 
     const ops = await this.opStorage.readOpsAfter(this.state.lastSeq);
+    this.log.info(`pull: ${ops.length} new ops (lastSeq=${this.state.lastSeq} → remoteSeq=${remoteSeq})`);
 
+    let applied = 0;
     for (const op of ops) {
       if (op.device === this.deviceId) {
         this.state.lastSeq = op.seq;
@@ -541,6 +567,11 @@ export class SyncEngineV2 {
       }
       await this.applyRemoteOp(op);
       this.state.lastSeq = op.seq;
+      applied++;
+    }
+
+    if (applied > 0) {
+      this.log.info(`pull: applied ${applied} ops, lastSeq=${this.state.lastSeq}`);
     }
   }
 
