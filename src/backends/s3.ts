@@ -4,6 +4,7 @@ import {
   GetObjectCommand,
   DeleteObjectCommand,
   ListObjectsV2Command,
+  HeadObjectCommand,
 } from "@aws-sdk/client-s3";
 import type { StorageBackend } from "../storage";
 
@@ -46,6 +47,48 @@ export class S3Backend implements StorageBackend {
         Body: new Uint8Array(data),
       })
     );
+  }
+
+  async putConditional(key: string, data: ArrayBuffer, ifMatch: string): Promise<boolean> {
+    try {
+      await this.client.send(
+        new PutObjectCommand({
+          Bucket: this.bucket,
+          Key: key,
+          Body: new Uint8Array(data),
+          IfMatch: ifMatch,
+        })
+      );
+      return true;
+    } catch (e: unknown) {
+      const err = e as S3Error;
+      if (err.name === "PreconditionFailed" || err.$metadata?.httpStatusCode === 412) {
+        return false;
+      }
+      throw e;
+    }
+  }
+
+  async getWithEtag(key: string): Promise<{ data: ArrayBuffer; etag: string } | null> {
+    try {
+      const res = await this.client.send(
+        new GetObjectCommand({
+          Bucket: this.bucket,
+          Key: key,
+          ResponseCacheControl: "no-store",
+        })
+      );
+      const bytes = await res.Body?.transformToByteArray();
+      if (!bytes) return null;
+      const etag = res.ETag || "";
+      return { data: bytes.buffer as ArrayBuffer, etag };
+    } catch (e: unknown) {
+      const err = e as S3Error;
+      if (err.name === "NoSuchKey" || err.$metadata?.httpStatusCode === 404) {
+        return null;
+      }
+      throw e;
+    }
   }
 
   async get(key: string): Promise<ArrayBuffer | null> {

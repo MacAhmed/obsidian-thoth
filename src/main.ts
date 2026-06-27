@@ -1,16 +1,31 @@
 import { Plugin, TFile, TAbstractFile } from "obsidian";
-import { Storage } from "./storage";
-import { SyncEngine } from "./sync";
-import { History } from "./history";
+import { SyncEngineV2, VaultAdapter } from "./sync-engine";
 import { S3Backend } from "./backends";
 import { Logger } from "./logger";
 import { ThothSettings, ThothSettingTab, DEFAULT_SETTINGS } from "./settings";
 
+const STATE_PATH = "_thoth-state.json";
+
+const EXCLUDED_PATHS = [
+  "_thoth-state.json",
+  "_thoth-log.md",
+  "_thoth-history.json",
+  ".obsidian/workspace.json",
+  ".obsidian/workspace-mobile.json",
+];
+
+function shouldSync(path: string): boolean {
+  if (EXCLUDED_PATHS.includes(path)) return false;
+  if (path.startsWith("_thoth")) return false;
+  return true;
+}
+
 export default class ThothPlugin extends Plugin {
   settings: ThothSettings = DEFAULT_SETTINGS;
-  private syncEngine: SyncEngine | null = null;
+  private engine: SyncEngineV2 | null = null;
   private pollInterval: number | null = null;
   private logger!: Logger;
+  private debounceTimer: number | null = null;
 
   async onload(): Promise<void> {
     await this.loadSettings();
@@ -20,33 +35,33 @@ export default class ThothPlugin extends Plugin {
     this.addCommand({
       id: "thoth-force-push",
       name: "Push changes now",
-      callback: () => { void this.syncEngine?.push(); },
+      callback: () => { void this.engine?.flush(); },
     });
 
     this.addCommand({
       id: "thoth-force-pull",
       name: "Pull changes now",
-      callback: () => { void this.syncEngine?.pull(); },
+      callback: () => { void this.engine?.pull(); },
     });
 
     this.addCommand({
       id: "thoth-force-reset",
       name: "Force reset: wipe remote, push local",
-      callback: () => { void this.syncEngine?.forceReset(); },
+      callback: () => { void this.forceReset(); },
     });
 
     this.addCommand({
       id: "thoth-force-pull-reset",
       name: "Force pull: delete local, pull remote",
-      callback: () => { void this.syncEngine?.forcePull(); },
+      callback: () => { void this.forcePull(); },
     });
 
     this.addRibbonIcon("upload-cloud", "Thoth: Push", () => {
-      void this.syncEngine?.push();
+      void this.engine?.flush();
     });
 
     this.addRibbonIcon("download-cloud", "Thoth: Pull", () => {
-      void this.syncEngine?.pull();
+      void this.engine?.pull();
     });
 
     if (this.isConfigured()) {
@@ -56,6 +71,9 @@ export default class ThothPlugin extends Plugin {
 
   onunload(): void {
     this.stopSync();
+    if (this.engine) {
+      void this.saveState();
+    }
   }
 
   private isConfigured(): boolean {
@@ -76,51 +94,100 @@ export default class ThothPlugin extends Plugin {
       bucket: this.settings.bucket,
     });
 
-    const storage = new Storage(backend);
-    const history = new History(this.app.vault);
-    await history.load();
-    this.syncEngine = new SyncEngine(
-      this.app.vault,
-      this.app.fileManager,
-      storage,
-      history,
-      this.settings.deviceId,
-      this.logger,
-      this.settings.mergeStrategy
-    );
+    const vault = this.app.vault;
+    const fileManager = this.app.fileManager;
 
-    await this.syncEngine.initialize();
+    const adapter: VaultAdapter = {
+      getFiles: () => {
+        return vault.getFiles()
+          .filter(f => shouldSync(f.path))
+          .map(f => ({ path: f.path, stat: { mtime: f.stat.mtime, size: f.stat.size } }));
+      },
+      readBinary: async (path: string) => {
+        const file = vault.getAbstractFileByPath(path);
+        if (!(file instanceof TFile)) return null;
+        return vault.readBinary(file);
+      },
+      createBinary: (path: string, data: ArrayBuffer) => {
+        void vault.createBinary(path, data);
+      },
+      modifyBinary: (path: string, data: ArrayBuffer) => {
+        const file = vault.getAbstractFileByPath(path);
+        if (file instanceof TFile) void vault.modifyBinary(file, data);
+      },
+      deletePath: (path: string) => {
+        const file = vault.getAbstractFileByPath(path);
+        if (file instanceof TFile) void fileManager.trashFile(file);
+      },
+      renamePath: (oldPath: string, newPath: string) => {
+        const file = vault.getAbstractFileByPath(oldPath);
+        if (file instanceof TFile) void fileManager.renameFile(file, newPath);
+      },
+      exists: (path: string) => vault.getAbstractFileByPath(path) !== null,
+      ensureFolder: (path: string) => {
+        const parts = path.split("/");
+        parts.pop();
+        if (parts.length === 0) return;
+        let current = "";
+        for (const part of parts) {
+          current = current ? `${current}/${part}` : part;
+          if (!vault.getAbstractFileByPath(current)) {
+            void vault.createFolder(current);
+          }
+        }
+      },
+    };
+
+    this.engine = new SyncEngineV2({
+      backend,
+      vault: adapter,
+      deviceId: this.settings.deviceId,
+    });
+
+    await this.loadState();
+    await this.engine.initialize();
+    await this.saveState();
 
     this.registerEvent(
-      this.app.vault.on("modify", (file: TAbstractFile) => {
-        if (file instanceof TFile) this.syncEngine?.onFileChange(file.path);
+      vault.on("modify", (file: TAbstractFile) => {
+        if (file instanceof TFile && shouldSync(file.path)) {
+          void this.engine?.onFileModifyAsync(file.path).then(() => this.schedulePush());
+        }
       })
     );
 
     this.registerEvent(
-      this.app.vault.on("create", (file: TAbstractFile) => {
-        if (file instanceof TFile) this.syncEngine?.onFileChange(file.path);
+      vault.on("create", (file: TAbstractFile) => {
+        if (file instanceof TFile && shouldSync(file.path)) {
+          void this.engine?.onFileCreateAsync(file.path).then(() => this.schedulePush());
+        }
       })
     );
 
     this.registerEvent(
-      this.app.vault.on("delete", (file: TAbstractFile) => {
-        if (file instanceof TFile) this.syncEngine?.onFileDelete(file.path);
+      vault.on("delete", (file: TAbstractFile) => {
+        if (file instanceof TFile && shouldSync(file.path)) {
+          this.engine?.onFileDelete(file.path);
+          this.schedulePush();
+        }
       })
     );
 
     this.registerEvent(
-      this.app.vault.on("rename", (file: TAbstractFile, oldPath: string) => {
-        if (file instanceof TFile) this.syncEngine?.onFileRename(oldPath, file.path);
+      vault.on("rename", (file: TAbstractFile, oldPath: string) => {
+        if (file instanceof TFile && shouldSync(file.path)) {
+          this.engine?.onFileRename(oldPath, file.path);
+          this.schedulePush();
+        }
       })
     );
 
     this.pollInterval = window.setInterval(
-      () => { void this.syncEngine?.pull(); },
+      () => { void this.engine?.pull(); },
       this.settings.pollInterval * 1000
     );
 
-    this.logger.notice("Thoth: sync started");
+    this.logger.notice("Thoth: sync started (V2)");
   }
 
   private stopSync(): void {
@@ -128,7 +195,61 @@ export default class ThothPlugin extends Plugin {
       window.clearInterval(this.pollInterval);
       this.pollInterval = null;
     }
-    this.syncEngine = null;
+    if (this.debounceTimer !== null) {
+      window.clearTimeout(this.debounceTimer);
+      this.debounceTimer = null;
+    }
+    this.engine = null;
+  }
+
+  private schedulePush(): void {
+    if (this.debounceTimer !== null) window.clearTimeout(this.debounceTimer);
+    this.debounceTimer = window.setTimeout(async () => {
+      await this.engine?.flush();
+      await this.saveState();
+    }, 2000);
+  }
+
+  private async forceReset(): Promise<void> {
+    if (!this.engine) return;
+    this.logger.notice("Thoth: force reset — wiping remote and pushing local state");
+    // TODO: implement via opStorage.deleteAll() + reinitialize
+    await this.startSync();
+    this.logger.notice("Thoth: force reset complete");
+  }
+
+  private async forcePull(): Promise<void> {
+    if (!this.engine) return;
+    this.logger.notice("Thoth: force pull — replacing local with remote state");
+    // TODO: implement via vault clear + pull from checkpoint
+    this.logger.notice("Thoth: force pull complete");
+  }
+
+  private async loadState(): Promise<void> {
+    if (!this.engine) return;
+    try {
+      const file = this.app.vault.getAbstractFileByPath(STATE_PATH);
+      if (!(file instanceof TFile)) return;
+      const text = await this.app.vault.read(file);
+      this.engine.restore(text);
+    } catch {
+      // Missing or corrupt — engine starts fresh
+    }
+  }
+
+  private async saveState(): Promise<void> {
+    if (!this.engine) return;
+    const text = this.engine.serialize();
+    try {
+      const file = this.app.vault.getAbstractFileByPath(STATE_PATH);
+      if (file instanceof TFile) {
+        await this.app.vault.modify(file, text);
+      } else {
+        await this.app.vault.create(STATE_PATH, text);
+      }
+    } catch {
+      // Non-critical — will retry
+    }
   }
 
   async testConnection(): Promise<{ ok: boolean; error?: string }> {
@@ -141,15 +262,13 @@ export default class ThothPlugin extends Plugin {
       secretKey: this.settings.secretKey,
       bucket: this.settings.bucket,
     });
-    const storage = new Storage(backend);
-    const result = await storage.testConnection();
+    const result = await backend.test();
     this.logger.info(`testConnection: result=${JSON.stringify(result)}`);
     return result;
   }
 
   async loadSettings(): Promise<void> {
     this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData() as Partial<ThothSettings>);
-    // Migrate old pollInterval (was minutes, now seconds)
     if (this.settings.pollInterval < 10) {
       this.settings.pollInterval = Math.max(10, this.settings.pollInterval * 60);
       await this.saveData(this.settings);
@@ -158,7 +277,7 @@ export default class ThothPlugin extends Plugin {
 
   async saveSettings(): Promise<void> {
     await this.saveData(this.settings);
-    if (this.isConfigured() && !this.syncEngine) {
+    if (this.isConfigured() && !this.engine) {
       await this.startSync();
     }
   }

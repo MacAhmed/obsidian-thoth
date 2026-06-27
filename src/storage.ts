@@ -14,7 +14,9 @@ export interface FileEntry {
 
 export interface StorageBackend {
   put(key: string, data: ArrayBuffer): Promise<void>;
+  putConditional(key: string, data: ArrayBuffer, ifMatch: string): Promise<boolean>;
   get(key: string): Promise<ArrayBuffer | null>;
+  getWithEtag(key: string): Promise<{ data: ArrayBuffer; etag: string } | null>;
   delete(key: string): Promise<void>;
   list(prefix: string): Promise<string[]>;
   test(): Promise<{ ok: boolean; error?: string }>;
