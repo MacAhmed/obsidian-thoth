@@ -519,15 +519,12 @@ export class SyncEngineV2 {
 
     const remoteSeq = headResult.head.seq;
 
-    // Remote was reset (seq went backwards) — re-initialize from scratch
+    // Remote seq went backwards — remote was reset. Drop our local seq tracking
+    // so we can re-sync, but never auto-delete local files. User must run
+    // force pull explicitly if they want local replaced.
     if (remoteSeq < this.state.lastSeq) {
-      const allFiles = this.vault.getFiles();
-      for (const file of allFiles) {
-        await this.vault.deletePath(file.path);
-      }
-      this.state.registry = {};
-      this.state.outbox = [];
       this.state.lastSeq = 0;
+      this.state.registry = {};
       this.knownHashes.clear();
       await this.initFromRemote();
       return;
