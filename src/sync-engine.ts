@@ -302,34 +302,7 @@ export class SyncEngineV2 {
     this.state.lastSeq = headResult.head.seq;
   }
 
-  onFileCreate(path: string): void {
-    const result = this.vault.readBinary(path);
-    const content = result instanceof Promise ? null : result;
-    if (!content) return;
-
-    const hash = this.hashBytesSync(content);
-    const fileId = crypto.randomUUID();
-
-    this.state.registry[fileId] = { path, hash };
-    this.knownHashes.add(hash);
-
-    const file = this.vault.getFiles().find(f => f.path === path);
-    const size = file?.stat.size ?? content.byteLength;
-
-    const op: CreateOp = {
-      seq: 0,
-      device: this.deviceId,
-      ts: Date.now(),
-      type: "create",
-      fileId,
-      path,
-      hash,
-      size,
-    };
-    this.state.outbox.push(op);
-  }
-
-  async onFileCreateAsync(path: string): Promise<void> {
+  async onFileCreate(path: string): Promise<void> {
     const content = await this.vault.readBinary(path);
     if (!content) return;
 
@@ -342,53 +315,13 @@ export class SyncEngineV2 {
     const file = this.vault.getFiles().find(f => f.path === path);
     const size = file?.stat.size ?? content.byteLength;
 
-    const op: CreateOp = {
-      seq: 0,
-      device: this.deviceId,
-      ts: Date.now(),
-      type: "create",
-      fileId,
-      path,
-      hash,
-      size,
-    };
-    this.state.outbox.push(op);
+    this.state.outbox.push({
+      seq: 0, device: this.deviceId, ts: Date.now(),
+      type: "create", fileId, path, hash, size,
+    } as CreateOp);
   }
 
-  onFileModify(path: string): void {
-    const result = this.vault.readBinary(path);
-    const content = result instanceof Promise ? null : result;
-    if (!content) return;
-
-    const fileId = this.findFileIdByPath(path);
-    if (!fileId) return;
-
-    const previousHash = this.state.registry[fileId].hash;
-    const hash = this.hashBytesSync(content);
-
-    if (hash === previousHash) return;
-
-    this.state.registry[fileId].hash = hash;
-    this.knownHashes.add(hash);
-
-    const file = this.vault.getFiles().find(f => f.path === path);
-    const size = file?.stat.size ?? content.byteLength;
-
-    const op: ModifyOp = {
-      seq: 0,
-      device: this.deviceId,
-      ts: Date.now(),
-      type: "modify",
-      fileId,
-      hash,
-      previousHash,
-      size,
-      basedOnSeq: this.state.lastSeq,
-    };
-    this.state.outbox.push(op);
-  }
-
-  async onFileModifyAsync(path: string): Promise<void> {
+  async onFileModify(path: string): Promise<void> {
     const content = await this.vault.readBinary(path);
     if (!content) return;
 
@@ -406,18 +339,11 @@ export class SyncEngineV2 {
     const file = this.vault.getFiles().find(f => f.path === path);
     const size = file?.stat.size ?? content.byteLength;
 
-    const op: ModifyOp = {
-      seq: 0,
-      device: this.deviceId,
-      ts: Date.now(),
-      type: "modify",
-      fileId,
-      hash,
-      previousHash,
-      size,
+    this.state.outbox.push({
+      seq: 0, device: this.deviceId, ts: Date.now(),
+      type: "modify", fileId, hash, previousHash, size,
       basedOnSeq: this.state.lastSeq,
-    };
-    this.state.outbox.push(op);
+    } as ModifyOp);
   }
 
   onFileDelete(path: string): void {

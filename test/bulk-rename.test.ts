@@ -97,7 +97,7 @@ describe("bulk rename (the V1 killer)", () => {
     const { engine: engineA, vault: vaultA } = createEngine({ backend, deviceId: "A" });
     for (let i = 0; i < 100; i++) {
       vaultA.addFile(`old/note-${i}.md`, `content ${i}`);
-      engineA.onFileCreate(`old/note-${i}.md`);
+      await engineA.onFileCreate(`old/note-${i}.md`);
     }
     await engineA.flush();
 
@@ -129,7 +129,7 @@ describe("bulk rename (the V1 killer)", () => {
 
     const { engine: engineA, vault: vaultA } = createEngine({ backend, deviceId: "A" });
     vaultA.addFile("shared.md", "original");
-    engineA.onFileCreate("shared.md");
+    await engineA.onFileCreate("shared.md");
     await engineA.flush();
 
     const { engine: engineB, vault: vaultB } = createEngine({ backend, deviceId: "B" });
@@ -140,7 +140,7 @@ describe("bulk rename (the V1 killer)", () => {
     await engineA.flush();
 
     vaultB.modifyFile("shared.md", "edited content");
-    engineB.onFileModify("shared.md");
+    await engineB.onFileModify("shared.md");
     await engineB.flush();
 
     await engineB.pull();
@@ -152,7 +152,7 @@ describe("bulk rename (the V1 killer)", () => {
 
     const { engine: engineA, vault: vaultA } = createEngine({ backend, deviceId: "A" });
     vaultA.addFile("to-delete.md", "doomed");
-    engineA.onFileCreate("to-delete.md");
+    await engineA.onFileCreate("to-delete.md");
     await engineA.flush();
 
     const { engine: engineB, vault: vaultB } = createEngine({ backend, deviceId: "B" });
@@ -181,10 +181,10 @@ describe("concurrent push (sequence conflict)", () => {
     const { engine: engineB, vault: vaultB } = createEngine({ backend, deviceId: "B" });
 
     vaultA.addFile("from-a.md", "aaa");
-    engineA.onFileCreate("from-a.md");
+    await engineA.onFileCreate("from-a.md");
 
     vaultB.addFile("from-b.md", "bbb");
-    engineB.onFileCreate("from-b.md");
+    await engineB.onFileCreate("from-b.md");
 
     await engineA.flush();
     await engineB.flush();

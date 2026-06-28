@@ -7,20 +7,20 @@ describe("conflict detection (basedOnSeq)", () => {
 
     const { engine: engineA, vault: vaultA } = createEngine({ backend, deviceId: "A" });
     vaultA.addFile("a.md", "v1");
-    engineA.onFileCreate("a.md");
+    await engineA.onFileCreate("a.md");
     await engineA.flush(); // seq 1
 
     const { engine: engineB, vault: vaultB } = createEngine({ backend, deviceId: "B" });
     await engineB.pull(); // sees seq 1
 
     vaultA.modifyFile("a.md", "v2 from A");
-    engineA.onFileModify("a.md");
+    await engineA.onFileModify("a.md");
     await engineA.flush(); // seq 2
 
     // B explicitly pulls first, THEN edits — so B.lastSeq=2 before creating modify op
     await engineB.pull(); // B sees seq 2, lastSeq becomes 2
     vaultB.modifyFile("a.md", "v3 from B based on v2");
-    engineB.onFileModify("a.md"); // basedOnSeq=2
+    await engineB.onFileModify("a.md"); // basedOnSeq=2
     await engineB.flush(); // seq 3
 
     await engineA.pull();
@@ -34,7 +34,7 @@ describe("conflict detection (basedOnSeq)", () => {
 
     const { engine: engineA, vault: vaultA } = createEngine({ backend, deviceId: "A" });
     vaultA.addFile("shared.md", "original");
-    engineA.onFileCreate("shared.md");
+    await engineA.onFileCreate("shared.md");
     await engineA.flush(); // seq 1
 
     const { engine: engineB, vault: vaultB } = createEngine({ backend, deviceId: "B" });
@@ -42,10 +42,10 @@ describe("conflict detection (basedOnSeq)", () => {
 
     // Both devices modify without pulling from each other — concurrent ops
     vaultA.modifyFile("shared.md", "A's version");
-    engineA.onFileModify("shared.md");
+    await engineA.onFileModify("shared.md");
 
     vaultB.modifyFile("shared.md", "B's version");
-    engineB.onFileModify("shared.md");
+    await engineB.onFileModify("shared.md");
 
     // A flushes first → seq 2
     await engineA.flush();
@@ -66,7 +66,7 @@ describe("conflict detection (basedOnSeq)", () => {
 
     const { engine: engineA, vault: vaultA } = createEngine({ backend, deviceId: "A" });
     vaultA.addFile("doc.md", "content");
-    engineA.onFileCreate("doc.md");
+    await engineA.onFileCreate("doc.md");
     await engineA.flush(); // seq 1
 
     const { engine: engineB, vault: vaultB } = createEngine({ backend, deviceId: "B" });
@@ -78,7 +78,7 @@ describe("conflict detection (basedOnSeq)", () => {
     await engineA.flush(); // seq 2
 
     vaultB.modifyFile("doc.md", "B's edit");
-    engineB.onFileModify("doc.md");
+    await engineB.onFileModify("doc.md");
     await engineB.flush(); // seq 3 (sees seq 2 before flush, pulls A's delete, keeps local since modified)
 
     // After sync, B should retain its edit (local modify wins over remote delete)
@@ -93,14 +93,14 @@ describe("force reset", () => {
 
     const { engine: engineA, vault: vaultA } = createEngine({ backend, deviceId: "A" });
     vaultA.addFile("a.md", "original");
-    engineA.onFileCreate("a.md");
+    await engineA.onFileCreate("a.md");
     await engineA.flush();
 
     const { engine: engineB, vault: vaultB } = createEngine({ backend, deviceId: "B" });
     await engineB.pull();
 
     vaultA.modifyFile("a.md", "local version after reset");
-    engineA.onFileModify("a.md");
+    await engineA.onFileModify("a.md");
     await engineA.forceReset();
 
     await engineB.pull();
@@ -114,7 +114,7 @@ describe("force pull", () => {
 
     const { engine: engineA, vault: vaultA } = createEngine({ backend, deviceId: "A" });
     vaultA.addFile("remote.md", "remote content");
-    engineA.onFileCreate("remote.md");
+    await engineA.onFileCreate("remote.md");
     await engineA.flush();
 
     const vaultB = new MockVault();

@@ -131,37 +131,37 @@ function createEngine(config?: Partial<EngineConfig>) {
 
 describe("SyncEngineV2", () => {
   describe("UUID assignment", () => {
-    it("assigns a UUID to a new file on create", () => {
+    it("assigns a UUID to a new file on create", async () => {
       const { engine, vault } = createEngine();
       vault.addFile("notes/hello.md", "hello world");
-      engine.onFileCreate("notes/hello.md");
+      await engine.onFileCreate("notes/hello.md");
       const state = engine.getState();
       const entries = Object.entries(state.registry);
       expect(entries).toHaveLength(1);
       expect(entries[0][1].path).toBe("notes/hello.md");
     });
 
-    it("assigns unique UUIDs to different files", () => {
+    it("assigns unique UUIDs to different files", async () => {
       const { engine, vault } = createEngine();
       vault.addFile("a.md", "aaa");
       vault.addFile("b.md", "bbb");
-      engine.onFileCreate("a.md");
-      engine.onFileCreate("b.md");
+      await engine.onFileCreate("a.md");
+      await engine.onFileCreate("b.md");
       const state = engine.getState();
       const ids = Object.keys(state.registry);
       expect(ids).toHaveLength(2);
       expect(ids[0]).not.toBe(ids[1]);
     });
 
-    it("does not reassign UUID on modify", () => {
+    it("does not reassign UUID on modify", async () => {
       const { engine, vault } = createEngine();
       vault.addFile("a.md", "v1");
-      engine.onFileCreate("a.md");
+      await engine.onFileCreate("a.md");
       const state1 = engine.getState();
       const id = Object.keys(state1.registry)[0];
 
       vault.modifyFile("a.md", "v2");
-      engine.onFileModify("a.md");
+      await engine.onFileModify("a.md");
       const state2 = engine.getState();
       expect(Object.keys(state2.registry)[0]).toBe(id);
     });
@@ -171,7 +171,7 @@ describe("SyncEngineV2", () => {
     it("creates a create op for new file", async () => {
       const { engine, vault } = createEngine();
       vault.addFile("notes/test.md", "content");
-      engine.onFileCreate("notes/test.md");
+      await engine.onFileCreate("notes/test.md");
       const state = engine.getState();
       expect(state.outbox).toHaveLength(1);
       expect(state.outbox[0].type).toBe("create");
@@ -183,19 +183,19 @@ describe("SyncEngineV2", () => {
     it("creates a modify op for changed file", async () => {
       const { engine, vault } = createEngine();
       vault.addFile("a.md", "v1");
-      engine.onFileCreate("a.md");
+      await engine.onFileCreate("a.md");
 
       vault.modifyFile("a.md", "v2");
-      engine.onFileModify("a.md");
+      await engine.onFileModify("a.md");
       const state = engine.getState();
       expect(state.outbox).toHaveLength(2);
       expect(state.outbox[1].type).toBe("modify");
     });
 
-    it("creates a delete op", () => {
+    it("creates a delete op", async () => {
       const { engine, vault } = createEngine();
       vault.addFile("a.md", "content");
-      engine.onFileCreate("a.md");
+      await engine.onFileCreate("a.md");
 
       vault.deleteFile("a.md");
       engine.onFileDelete("a.md");
@@ -204,10 +204,10 @@ describe("SyncEngineV2", () => {
       expect(state.outbox[1].type).toBe("delete");
     });
 
-    it("creates a rename op with stable UUID", () => {
+    it("creates a rename op with stable UUID", async () => {
       const { engine, vault } = createEngine();
       vault.addFile("old.md", "content");
-      engine.onFileCreate("old.md");
+      await engine.onFileCreate("old.md");
       const id = Object.keys(engine.getState().registry)[0];
 
       vault.renameFile("old.md", "new.md");
@@ -222,13 +222,13 @@ describe("SyncEngineV2", () => {
       expect(state.registry[id].path).toBe("new.md");
     });
 
-    it("sets basedOnSeq on mutating ops", () => {
+    it("sets basedOnSeq on mutating ops", async () => {
       const { engine, vault } = createEngine();
       vault.addFile("a.md", "v1");
-      engine.onFileCreate("a.md");
+      await engine.onFileCreate("a.md");
 
       vault.modifyFile("a.md", "v2");
-      engine.onFileModify("a.md");
+      await engine.onFileModify("a.md");
       const state = engine.getState();
       const modOp = state.outbox[1] as Op & { type: "modify" };
       expect(modOp.basedOnSeq).toBe(0);
@@ -239,7 +239,7 @@ describe("SyncEngineV2", () => {
     it("flushes outbox to remote as a new chunk + updates head", async () => {
       const { engine, vault, backend } = createEngine();
       vault.addFile("a.md", "hello");
-      engine.onFileCreate("a.md");
+      await engine.onFileCreate("a.md");
 
       await engine.flush();
 
@@ -259,7 +259,7 @@ describe("SyncEngineV2", () => {
     it("uploads blob on create", async () => {
       const { engine, vault, backend } = createEngine();
       vault.addFile("a.md", "hello");
-      engine.onFileCreate("a.md");
+      await engine.onFileCreate("a.md");
       await engine.flush();
 
       const blobs = await backend.list("blobs/");
@@ -269,11 +269,11 @@ describe("SyncEngineV2", () => {
     it("skips blob upload if hash already exists", async () => {
       const { engine, vault, backend } = createEngine();
       vault.addFile("a.md", "same content");
-      engine.onFileCreate("a.md");
+      await engine.onFileCreate("a.md");
       await engine.flush();
 
       vault.addFile("b.md", "same content");
-      engine.onFileCreate("b.md");
+      await engine.onFileCreate("b.md");
 
       const putSpy = vi.spyOn(backend, "put");
       await engine.flush();
@@ -285,11 +285,11 @@ describe("SyncEngineV2", () => {
     it("assigns sequential seq numbers across flushes", async () => {
       const { engine, vault } = createEngine();
       vault.addFile("a.md", "a");
-      engine.onFileCreate("a.md");
+      await engine.onFileCreate("a.md");
       await engine.flush();
 
       vault.addFile("b.md", "b");
-      engine.onFileCreate("b.md");
+      await engine.onFileCreate("b.md");
       await engine.flush();
 
       expect(engine.getState().lastSeq).toBe(2);
@@ -308,7 +308,7 @@ describe("SyncEngineV2", () => {
 
       const { engine: engineA, vault: vaultA } = createEngine({ backend, deviceId: "A" });
       vaultA.addFile("notes/from-a.md", "from device A");
-      engineA.onFileCreate("notes/from-a.md");
+      await engineA.onFileCreate("notes/from-a.md");
       await engineA.flush();
 
       const { engine: engineB, vault: vaultB } = createEngine({ backend, deviceId: "B" });
@@ -324,14 +324,14 @@ describe("SyncEngineV2", () => {
 
       const { engine: engineA, vault: vaultA } = createEngine({ backend, deviceId: "A" });
       vaultA.addFile("a.md", "v1");
-      engineA.onFileCreate("a.md");
+      await engineA.onFileCreate("a.md");
       await engineA.flush();
 
       const { engine: engineB, vault: vaultB } = createEngine({ backend, deviceId: "B" });
       await engineB.pull();
 
       vaultA.modifyFile("a.md", "v2");
-      engineA.onFileModify("a.md");
+      await engineA.onFileModify("a.md");
       await engineA.flush();
 
       await engineB.pull();
@@ -344,7 +344,7 @@ describe("SyncEngineV2", () => {
 
       const { engine: engineA, vault: vaultA } = createEngine({ backend, deviceId: "A" });
       vaultA.addFile("a.md", "content");
-      engineA.onFileCreate("a.md");
+      await engineA.onFileCreate("a.md");
       await engineA.flush();
 
       const { engine: engineB, vault: vaultB } = createEngine({ backend, deviceId: "B" });
@@ -364,7 +364,7 @@ describe("SyncEngineV2", () => {
 
       const { engine: engineA, vault: vaultA } = createEngine({ backend, deviceId: "A" });
       vaultA.addFile("old.md", "content");
-      engineA.onFileCreate("old.md");
+      await engineA.onFileCreate("old.md");
       await engineA.flush();
 
       const { engine: engineB, vault: vaultB } = createEngine({ backend, deviceId: "B" });
@@ -385,7 +385,7 @@ describe("SyncEngineV2", () => {
 
       const { engine: engineA, vault: vaultA } = createEngine({ backend, deviceId: "A" });
       vaultA.addFile("a.md", "content");
-      engineA.onFileCreate("a.md");
+      await engineA.onFileCreate("a.md");
       await engineA.flush();
 
       const { engine: engineB, vault: vaultB } = createEngine({ backend, deviceId: "B" });

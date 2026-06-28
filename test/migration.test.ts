@@ -84,7 +84,7 @@ describe("crash recovery (outbox persistence)", () => {
     vault.addFile("a.md", "content");
 
     const { engine: engine1 } = createEngine({ backend, vault, deviceId: "dev1" });
-    engine1.onFileCreate("a.md");
+    await engine1.onFileCreate("a.md");
 
     const serialized = engine1.serialize();
 
@@ -104,8 +104,8 @@ describe("crash recovery (outbox persistence)", () => {
     vault.addFile("b.md", "bbb");
 
     const { engine: engine1 } = createEngine({ backend, vault, deviceId: "dev1" });
-    engine1.onFileCreate("a.md");
-    engine1.onFileCreate("b.md");
+    await engine1.onFileCreate("a.md");
+    await engine1.onFileCreate("b.md");
     await engine1.flush();
 
     const serialized = engine1.serialize();

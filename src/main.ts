@@ -159,7 +159,7 @@ export default class ThothPlugin extends Plugin {
     this.registerEvent(
       vault.on("modify", (file: TAbstractFile) => {
         if (file instanceof TFile && shouldSync(file.path)) {
-          void this.engine?.onFileModifyAsync(file.path).then(() => this.schedulePush());
+          void this.engine?.onFileModify(file.path).then(() => this.schedulePush());
         }
       })
     );
@@ -167,7 +167,7 @@ export default class ThothPlugin extends Plugin {
     this.registerEvent(
       vault.on("create", (file: TAbstractFile) => {
         if (file instanceof TFile && shouldSync(file.path)) {
-          void this.engine?.onFileCreateAsync(file.path).then(() => this.schedulePush());
+          void this.engine?.onFileCreate(file.path).then(() => this.schedulePush());
         }
       })
     );
