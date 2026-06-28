@@ -108,23 +108,23 @@ export default class ThothPlugin extends Plugin {
         if (!(file instanceof TFile)) return null;
         return vault.readBinary(file);
       },
-      createBinary: (path: string, data: ArrayBuffer) => {
-        void vault.createBinary(path, data);
+      createBinary: async (path: string, data: ArrayBuffer) => {
+        await vault.createBinary(path, data);
       },
-      modifyBinary: (path: string, data: ArrayBuffer) => {
+      modifyBinary: async (path: string, data: ArrayBuffer) => {
         const file = vault.getAbstractFileByPath(path);
-        if (file instanceof TFile) void vault.modifyBinary(file, data);
+        if (file instanceof TFile) await vault.modifyBinary(file, data);
       },
-      deletePath: (path: string) => {
+      deletePath: async (path: string) => {
         const file = vault.getAbstractFileByPath(path);
-        if (file instanceof TFile) void fileManager.trashFile(file);
+        if (file instanceof TFile) await fileManager.trashFile(file);
       },
-      renamePath: (oldPath: string, newPath: string) => {
+      renamePath: async (oldPath: string, newPath: string) => {
         const file = vault.getAbstractFileByPath(oldPath);
-        if (file instanceof TFile) void fileManager.renameFile(file, newPath);
+        if (file instanceof TFile) await fileManager.renameFile(file, newPath);
       },
       exists: (path: string) => vault.getAbstractFileByPath(path) !== null,
-      ensureFolder: (path: string) => {
+      ensureFolder: async (path: string) => {
         const parts = path.split("/");
         parts.pop();
         if (parts.length === 0) return;
@@ -132,7 +132,7 @@ export default class ThothPlugin extends Plugin {
         for (const part of parts) {
           current = current ? `${current}/${part}` : part;
           if (!vault.getAbstractFileByPath(current)) {
-            void vault.createFolder(current);
+            await vault.createFolder(current);
           }
         }
       },
@@ -194,7 +194,11 @@ export default class ThothPlugin extends Plugin {
       () => {
         void this.engine?.pull().catch((e: unknown) => {
           const err = e as { name?: string; message?: string };
-          this.logger.error(`poll failed: ${err.name}: ${err.message}`, err);
+          if (err.name === "TypeError" && err.message === "Failed to fetch") {
+            this.logger.info("poll: offline, will retry");
+          } else {
+            this.logger.error(`poll failed: ${err.name}: ${err.message}`, err);
+          }
         });
       },
       this.settings.pollInterval * 1000
