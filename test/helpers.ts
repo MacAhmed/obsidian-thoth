@@ -78,12 +78,12 @@ export function createEngine(config: { backend: MemoryBackend; vault?: MockVault
     vault: {
       getFiles: () => vault.getAllFiles().map(f => ({ path: f.path, stat: { mtime: f.mtime, size: f.size } })),
       readBinary: (path: string) => vault.readBinary(path),
-      createBinary: (path: string, data: ArrayBuffer) => { vault.addFile(path, new TextDecoder().decode(data)); },
-      modifyBinary: (path: string, data: ArrayBuffer) => { vault.modifyFile(path, new TextDecoder().decode(data)); },
-      deletePath: (path: string) => { vault.deleteFile(path); },
-      renamePath: (oldPath: string, newPath: string) => { vault.renameFile(oldPath, newPath); },
+      createBinary: async (path: string, data: ArrayBuffer) => { vault.addFile(path, new TextDecoder().decode(data)); },
+      modifyBinary: async (path: string, data: ArrayBuffer) => { vault.modifyFile(path, new TextDecoder().decode(data)); },
+      deletePath: async (path: string) => { vault.deleteFile(path); },
+      renamePath: async (oldPath: string, newPath: string) => { vault.renameFile(oldPath, newPath); },
       exists: (path: string) => vault.files.has(path),
-      ensureFolder: () => {},
+      ensureFolder: async (_path: string) => {},
     },
     deviceId,
   });
