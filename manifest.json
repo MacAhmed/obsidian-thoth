@@ -1,7 +1,7 @@
 {
   "id": "thoth-sync",
   "name": "Thoth",
-  "version": "0.4.26",
+  "version": "0.4.27",
   "minAppVersion": "1.7.2",
   "description": "Lightweight vault sync via S3-compatible object storage.",
   "author": "Mac Ahmed",
