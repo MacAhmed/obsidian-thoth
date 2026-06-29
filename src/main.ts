@@ -153,6 +153,15 @@ export default class ThothPlugin extends Plugin {
 
     await this.loadState();
     this.logger.info(`loadState: lastSeq=${this.engine.getState().lastSeq} registry=${Object.keys(this.engine.getState().registry).length}`);
+
+    let wakeLock: WakeLockSentinel | null = null;
+    try {
+      wakeLock = await navigator.wakeLock?.request("screen");
+      this.logger.info("initialize: wake lock acquired");
+    } catch {
+      // wake lock not supported or denied — continue without it
+    }
+
     try {
       await this.engine.initialize();
     } catch (e: unknown) {
@@ -160,6 +169,8 @@ export default class ThothPlugin extends Plugin {
       this.logger.notice(`Thoth init failed: ${err.name}: ${err.message}`, 10000);
       this.logger.error("initialize() threw", err);
       return;
+    } finally {
+      wakeLock?.release();
     }
     await this.saveState();
 
