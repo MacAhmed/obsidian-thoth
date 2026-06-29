@@ -246,7 +246,11 @@ export class SyncEngineV2 {
       const blob = await this.opStorage.getBlob(remote.hash);
       if (!blob) continue;
       await this.vault.ensureFolder(remote.path);
-      await this.vault.createBinary(remote.path, blob);
+      if (this.vault.exists(remote.path)) {
+        await this.vault.modifyBinary(remote.path, blob);
+      } else {
+        await this.vault.createBinary(remote.path, blob);
+      }
       this.state.registry[fileId] = { path: remote.path, hash: remote.hash };
       this.knownHashes.add(remote.hash);
       if ((i + 1) % 50 === 0) {
@@ -297,7 +301,11 @@ export class SyncEngineV2 {
         const blob = await this.opStorage.getBlob(entry.hash);
         if (!blob) continue;
         await this.vault.ensureFolder(entry.path);
-        await this.vault.createBinary(entry.path, blob);
+        if (this.vault.exists(entry.path)) {
+          await this.vault.modifyBinary(entry.path, blob);
+        } else {
+          await this.vault.createBinary(entry.path, blob);
+        }
         this.state.registry[fileId] = { path: entry.path, hash: entry.hash };
         this.knownHashes.add(entry.hash);
         if ((i + 1) % 50 === 0) {
