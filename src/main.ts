@@ -143,9 +143,11 @@ export default class ThothPlugin extends Plugin {
       vault: adapter,
       deviceId: this.settings.deviceId,
       logger: this.logger,
+      onProgress: () => this.saveState(),
     });
 
     await this.loadState();
+    this.logger.info(`loadState: lastSeq=${this.engine.getState().lastSeq} registry=${Object.keys(this.engine.getState().registry).length}`);
     try {
       await this.engine.initialize();
     } catch (e: unknown) {

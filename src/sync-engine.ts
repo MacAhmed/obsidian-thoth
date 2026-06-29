@@ -30,6 +30,7 @@ export interface SyncEngineV2Config {
   vault: VaultAdapter;
   deviceId: string;
   logger?: EngineLogger;
+  onProgress?: () => Promise<void>;
 }
 
 export class SyncEngineV2 {
@@ -39,12 +40,14 @@ export class SyncEngineV2 {
   private state: LocalState;
   private knownHashes = new Set<string>();
   private log: EngineLogger;
+  private onProgress: () => Promise<void>;
 
   constructor(config: SyncEngineV2Config) {
     this.opStorage = new OpStorage(config.backend);
     this.vault = config.vault;
     this.deviceId = config.deviceId;
     this.log = config.logger ?? nullLogger;
+    this.onProgress = config.onProgress ?? (() => Promise.resolve());
     this.state = {
       version: 2,
       deviceId: config.deviceId,
@@ -235,14 +238,21 @@ export class SyncEngineV2 {
     }
 
     // Remaining unmatched remote (not conflicting with local) → pull them down
-    for (const fileId of unmatchedRemote) {
+    const remoteOnly = [...unmatchedRemote];
+    for (let i = 0; i < remoteOnly.length; i++) {
+      const fileId = remoteOnly[i];
       const remote = remoteState.get(fileId)!;
+      if (this.state.registry[fileId]) continue; // already pulled (resumed)
       const blob = await this.opStorage.getBlob(remote.hash);
       if (!blob) continue;
       await this.vault.ensureFolder(remote.path);
       await this.vault.createBinary(remote.path, blob);
       this.state.registry[fileId] = { path: remote.path, hash: remote.hash };
       this.knownHashes.add(remote.hash);
+      if ((i + 1) % 50 === 0) {
+        this.log.info(`reconcile: pulled ${i + 1}/${remoteOnly.length} remote-only files`);
+        await this.onProgress();
+      }
     }
 
     this.state.lastSeq = headSeq;
@@ -280,13 +290,20 @@ export class SyncEngineV2 {
     const fromSeq = checkpoint?.seq ?? -1;
 
     if (checkpoint) {
-      for (const [fileId, entry] of Object.entries(checkpoint.files)) {
+      const entries = Object.entries(checkpoint.files);
+      for (let i = 0; i < entries.length; i++) {
+        const [fileId, entry] = entries[i];
+        if (this.state.registry[fileId]) continue; // already pulled (resumed)
         const blob = await this.opStorage.getBlob(entry.hash);
         if (!blob) continue;
         await this.vault.ensureFolder(entry.path);
         await this.vault.createBinary(entry.path, blob);
         this.state.registry[fileId] = { path: entry.path, hash: entry.hash };
         this.knownHashes.add(entry.hash);
+        if ((i + 1) % 50 === 0) {
+          this.log.info(`initFromRemote: ${i + 1}/${entries.length} files pulled`);
+          await this.onProgress();
+        }
       }
     }
 
