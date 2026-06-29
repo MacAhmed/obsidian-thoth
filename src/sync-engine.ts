@@ -242,27 +242,57 @@ export class SyncEngineV2 {
 
     // Remaining unmatched remote (not conflicting with local) → pull them down, priority first
     const remoteOnly = this.prioritySorted([...unmatchedRemote], id => remoteState.get(id)?.path ?? "");
-    for (let i = 0; i < remoteOnly.length; i++) {
-      const fileId = remoteOnly[i];
-      const remote = remoteState.get(fileId)!;
-      if (this.state.registry[fileId]) continue; // already pulled (resumed)
-      const blob = await this.opStorage.getBlob(remote.hash);
-      if (!blob) continue;
-      await this.vault.ensureFolder(remote.path);
-      if (this.vault.exists(remote.path)) {
-        await this.vault.modifyBinary(remote.path, blob);
-      } else {
-        await this.vault.createBinary(remote.path, blob);
+    const items = remoteOnly.map(id => ({ fileId: id, ...remoteState.get(id)! }));
+    await this.downloadBatch(items, "reconcile");
+
+    this.state.lastSeq = headSeq;
+  }
+
+  private async downloadBatch(
+    items: Array<{ fileId: string; path: string; hash: string }>,
+    label: string,
+    concurrency = 10,
+  ): Promise<void> {
+    const pending = items.filter(item => !this.state.registry[item.fileId]);
+    const total = pending.length + Object.keys(this.state.registry).length;
+    let completed = 0;
+
+    // Process in chunks; within each chunk fetch blobs in parallel
+    for (let i = 0; i < pending.length; i += concurrency) {
+      const batch = pending.slice(i, i + concurrency);
+
+      // Fetch all blobs in parallel
+      const blobs = await Promise.all(
+        batch.map(item => this.opStorage.getBlob(item.hash))
+      );
+
+      // Write to vault sequentially — vault API is not concurrency-safe
+      for (let j = 0; j < batch.length; j++) {
+        const item = batch[j];
+        const blob = blobs[j];
+        if (!blob) continue;
+        await this.vault.ensureFolder(item.path);
+        if (this.vault.exists(item.path)) {
+          await this.vault.modifyBinary(item.path, blob);
+        } else {
+          await this.vault.createBinary(item.path, blob);
+        }
+        this.state.registry[item.fileId] = { path: item.path, hash: item.hash };
+        this.knownHashes.add(item.hash);
+        completed++;
       }
-      this.state.registry[fileId] = { path: remote.path, hash: remote.hash };
-      this.knownHashes.add(remote.hash);
-      if ((i + 1) % 50 === 0) {
-        this.log.info(`reconcile: pulled ${i + 1}/${remoteOnly.length} remote-only files`);
+
+      const pulled = i + batch.length;
+      if (Math.floor(pulled / 50) > Math.floor((pulled - batch.length) / 50)) {
+        this.log.info(`${label}: pulled ${pulled}/${pending.length} files`);
         await this.onProgress();
       }
     }
 
-    this.state.lastSeq = headSeq;
+    if (completed > 0) {
+      this.log.info(`${label}: complete — ${completed} files pulled`);
+      await this.onProgress();
+    }
   }
 
   private async initFromLocalVault(files: Array<{ path: string; stat: { mtime: number; size: number } }>): Promise<void> {
@@ -298,24 +328,8 @@ export class SyncEngineV2 {
 
     if (checkpoint) {
       const entries = this.prioritySorted(Object.entries(checkpoint.files), ([, e]) => e.path);
-      for (let i = 0; i < entries.length; i++) {
-        const [fileId, entry] = entries[i];
-        if (this.state.registry[fileId]) continue; // already pulled (resumed)
-        const blob = await this.opStorage.getBlob(entry.hash);
-        if (!blob) continue;
-        await this.vault.ensureFolder(entry.path);
-        if (this.vault.exists(entry.path)) {
-          await this.vault.modifyBinary(entry.path, blob);
-        } else {
-          await this.vault.createBinary(entry.path, blob);
-        }
-        this.state.registry[fileId] = { path: entry.path, hash: entry.hash };
-        this.knownHashes.add(entry.hash);
-        if ((i + 1) % 50 === 0) {
-          this.log.info(`initFromRemote: ${i + 1}/${entries.length} files pulled`);
-          await this.onProgress();
-        }
-      }
+      const items = entries.map(([fileId, entry]) => ({ fileId, path: entry.path, hash: entry.hash }));
+      await this.downloadBatch(items, "initFromRemote");
     }
 
     const headResult = await this.opStorage.getHead();
