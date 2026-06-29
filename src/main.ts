@@ -132,7 +132,11 @@ export default class ThothPlugin extends Plugin {
         for (const part of parts) {
           current = current ? `${current}/${part}` : part;
           if (!vault.getAbstractFileByPath(current)) {
-            await vault.createFolder(current);
+            try {
+              await vault.createFolder(current);
+            } catch {
+              // folder was created concurrently — ignore
+            }
           }
         }
       },
@@ -144,6 +148,7 @@ export default class ThothPlugin extends Plugin {
       deviceId: this.settings.deviceId,
       logger: this.logger,
       onProgress: () => this.saveState(),
+      priorityFolders: this.settings.priorityFolders,
     });
 
     await this.loadState();
@@ -261,19 +266,25 @@ export default class ThothPlugin extends Plugin {
     }
   }
 
-  private async saveState(): Promise<void> {
-    if (!this.engine) return;
-    const text = this.engine.serialize();
-    try {
-      const file = this.app.vault.getAbstractFileByPath(STATE_PATH);
-      if (file instanceof TFile) {
-        await this.app.vault.modify(file, text);
-      } else {
-        await this.app.vault.create(STATE_PATH, text);
+  private savingState: Promise<void> = Promise.resolve();
+
+  private saveState(): Promise<void> {
+    this.savingState = this.savingState.then(async () => {
+      if (!this.engine) return;
+      const text = this.engine.serialize();
+      try {
+        const file = this.app.vault.getAbstractFileByPath(STATE_PATH);
+        if (file instanceof TFile) {
+          await this.app.vault.modify(file, text);
+        } else {
+          await this.app.vault.create(STATE_PATH, text);
+        }
+      } catch (e: unknown) {
+        const err = e as { message?: string };
+        this.logger.error(`saveState failed: ${err.message}`, err);
       }
-    } catch {
-      // Non-critical — will retry
-    }
+    });
+    return this.savingState;
   }
 
   async testConnection(): Promise<{ ok: boolean; error?: string }> {

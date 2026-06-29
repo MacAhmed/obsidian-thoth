@@ -20,6 +20,7 @@ export interface ThothSettings {
   pollInterval: number;
   deviceId: string;
   mergeStrategy: "auto-merge" | "conflict-file";
+  priorityFolders: string[];
 }
 
 export const DEFAULT_SETTINGS: ThothSettings = {
@@ -31,6 +32,7 @@ export const DEFAULT_SETTINGS: ThothSettings = {
   pollInterval: 30,
   deviceId: crypto.randomUUID().slice(0, 8),
   mergeStrategy: "auto-merge",
+  priorityFolders: [],
 };
 
 export class ThothSettingTab extends PluginSettingTab {
@@ -148,6 +150,21 @@ export class ThothSettingTab extends PluginSettingTab {
           });
         })
       );
+
+    new Setting(containerEl).setName("Sync").setHeading();
+
+    new Setting(containerEl)
+      .setName("Priority folders")
+      .setDesc("Pull these folders first on initial sync. One folder prefix per line (e.g. 01_Inbox).")
+      .addTextArea((text) => {
+        text
+          .setValue(this.plugin.settings.priorityFolders.join("\n"))
+          .onChange((value) => {
+            this.plugin.settings.priorityFolders = value.split("\n").map(s => s.trim()).filter(Boolean);
+          });
+        text.inputEl.rows = 4;
+        text.inputEl.style.width = "100%";
+      });
 
     new Setting(containerEl).setName("Transfer").setHeading();
 

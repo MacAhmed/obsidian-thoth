@@ -31,6 +31,7 @@ export interface SyncEngineV2Config {
   deviceId: string;
   logger?: EngineLogger;
   onProgress?: () => Promise<void>;
+  priorityFolders?: string[];
 }
 
 export class SyncEngineV2 {
@@ -41,6 +42,7 @@ export class SyncEngineV2 {
   private knownHashes = new Set<string>();
   private log: EngineLogger;
   private onProgress: () => Promise<void>;
+  private priorityFolders: string[];
 
   constructor(config: SyncEngineV2Config) {
     this.opStorage = new OpStorage(config.backend);
@@ -48,6 +50,7 @@ export class SyncEngineV2 {
     this.deviceId = config.deviceId;
     this.log = config.logger ?? nullLogger;
     this.onProgress = config.onProgress ?? (() => Promise.resolve());
+    this.priorityFolders = config.priorityFolders ?? [];
     this.state = {
       version: 2,
       deviceId: config.deviceId,
@@ -237,8 +240,8 @@ export class SyncEngineV2 {
       }
     }
 
-    // Remaining unmatched remote (not conflicting with local) → pull them down
-    const remoteOnly = [...unmatchedRemote];
+    // Remaining unmatched remote (not conflicting with local) → pull them down, priority first
+    const remoteOnly = this.prioritySorted([...unmatchedRemote], id => remoteState.get(id)?.path ?? "");
     for (let i = 0; i < remoteOnly.length; i++) {
       const fileId = remoteOnly[i];
       const remote = remoteState.get(fileId)!;
@@ -294,7 +297,7 @@ export class SyncEngineV2 {
     const fromSeq = checkpoint?.seq ?? -1;
 
     if (checkpoint) {
-      const entries = Object.entries(checkpoint.files);
+      const entries = this.prioritySorted(Object.entries(checkpoint.files), ([, e]) => e.path);
       for (let i = 0; i < entries.length; i++) {
         const [fileId, entry] = entries[i];
         if (this.state.registry[fileId]) continue; // already pulled (resumed)
@@ -716,6 +719,22 @@ export class SyncEngineV2 {
 
   private async hashBytes(data: ArrayBuffer): Promise<string> {
     return this.hashBytesSync(data);
+  }
+
+  private prioritySorted<T>(items: T[], getPath: (item: T) => string): T[] {
+    if (this.priorityFolders.length === 0) return items;
+    return [...items].sort((a, b) => {
+      const pa = this.priorityRank(getPath(a));
+      const pb = this.priorityRank(getPath(b));
+      return pa - pb;
+    });
+  }
+
+  private priorityRank(filePath: string): number {
+    for (let i = 0; i < this.priorityFolders.length; i++) {
+      if (filePath.startsWith(this.priorityFolders[i])) return i;
+    }
+    return this.priorityFolders.length;
   }
 }
 
