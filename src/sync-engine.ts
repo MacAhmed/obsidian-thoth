@@ -445,6 +445,18 @@ export class SyncEngineV2 {
 
   async flush(): Promise<void> {
     if (this.state.outbox.length === 0) return;
+
+    // Deduplicate outbox — keep only the last op per fileId
+    const seen = new Map<string, number>();
+    for (let i = this.state.outbox.length - 1; i >= 0; i--) {
+      const fileId = this.state.outbox[i].fileId;
+      if (!seen.has(fileId)) seen.set(fileId, i);
+    }
+    if (seen.size < this.state.outbox.length) {
+      this.state.outbox = this.state.outbox.filter((_, i) => [...seen.values()].includes(i));
+      this.log.info(`flush: deduped outbox to ${this.state.outbox.length} ops`);
+    }
+
     this.log.info(`flush: ${this.state.outbox.length} ops in outbox, lastSeq=${this.state.lastSeq}`);
 
     let headResult = await this.opStorage.getHead();
@@ -459,7 +471,11 @@ export class SyncEngineV2 {
     let etag = headResult.etag;
 
     if (currentSeq > this.state.lastSeq) {
-      await this.pull();
+      try {
+        await this.pull();
+      } catch (e: unknown) {
+        this.log.error("flush: pull-before-flush failed, continuing", e);
+      }
       const refreshed = await this.opStorage.getHead();
       if (refreshed) {
         currentSeq = refreshed.head.seq;
@@ -621,6 +637,14 @@ export class SyncEngineV2 {
   }
 
   private async applyRemoteOp(op: Op): Promise<void> {
+    try {
+      await this.applyRemoteOpInner(op);
+    } catch (e: unknown) {
+      this.log.error(`applyRemoteOp: failed on seq=${op.seq} type=${op.type} fileId=${op.fileId}`, e);
+    }
+  }
+
+  private async applyRemoteOpInner(op: Op): Promise<void> {
     switch (op.type) {
       case "create": {
         const blob = await this.opStorage.getBlob(op.hash);

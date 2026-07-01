@@ -335,4 +335,72 @@ describe.skipIf(!HAVE_CREDS)("integration: real R2 bucket + real filesystem", ()
     expect(readFile(dirC, "b.md")).toBe("bbb");
     expect(readFile(dirC, "local.md")).toBe("local");
   }, 30_000);
+
+  it("zero conflict files: two active devices editing different files then syncing", async () => {
+    const dirA = makeTmpDir();
+    for (let i = 0; i < 20; i++) writeFile(dirA, `notes/note-${i}.md`, `v1 content ${i}`);
+    const engineA = makeEngine(dirA, "A");
+    await engineA.initialize();
+
+    const dirB = makeTmpDir();
+    const engineB = makeEngine(dirB, "B");
+    await engineB.initialize();
+
+    // Both devices edit different files concurrently
+    for (let i = 0; i < 10; i++) {
+      writeFile(dirA, `notes/note-${i}.md`, `A edited ${i}`);
+      await engineA.onFileModify(`notes/note-${i}.md`);
+    }
+    for (let i = 10; i < 20; i++) {
+      writeFile(dirB, `notes/note-${i}.md`, `B edited ${i}`);
+      await engineB.onFileModify(`notes/note-${i}.md`);
+    }
+
+    await engineA.flush();
+    await engineB.flush();
+    await engineA.pull();
+    await engineB.pull();
+
+    // Zero conflict files on either device
+    expect(listFiles(dirA).filter(f => f.includes(".conflict-"))).toHaveLength(0);
+    expect(listFiles(dirB).filter(f => f.includes(".conflict-"))).toHaveLength(0);
+
+    // Both devices converge on same content
+    for (let i = 0; i < 10; i++) {
+      expect(readFile(dirA, `notes/note-${i}.md`)).toBe(`A edited ${i}`);
+      expect(readFile(dirB, `notes/note-${i}.md`)).toBe(`A edited ${i}`);
+    }
+    for (let i = 10; i < 20; i++) {
+      expect(readFile(dirA, `notes/note-${i}.md`)).toBe(`B edited ${i}`);
+      expect(readFile(dirB, `notes/note-${i}.md`)).toBe(`B edited ${i}`);
+    }
+  }, 30_000);
+
+  it("zero conflict files: B has partial checkpoint version, A edits, B reconciles", async () => {
+    // Regression: the stale-pull false conflict scenario against real R2
+    const dirA = makeTmpDir();
+    writeFile(dirA, "02_Tracker/Daily/today.md", "morning notes");
+    writeFile(dirA, "01_Inbox/note.md", "inbox");
+    const engineA = makeEngine(dirA, "A");
+    await engineA.initialize(); // checkpoint written
+
+    // A edits the daily note throughout the day
+    writeFile(dirA, "02_Tracker/Daily/today.md", "morning notes\nafternoon notes\nevening notes");
+    await engineA.onFileModify("02_Tracker/Daily/today.md");
+    await engineA.flush();
+
+    // B has the checkpoint version on disk (simulates partial pull with no saved state)
+    const dirB = makeTmpDir();
+    writeFile(dirB, "02_Tracker/Daily/today.md", "morning notes");
+    writeFile(dirB, "01_Inbox/note.md", "inbox");
+    // B has NO registry — simulates lost state
+    const engineB = makeEngine(dirB, "B");
+    await engineB.initialize();
+
+    // Zero conflict files
+    expect(listFiles(dirB).filter(f => f.includes(".conflict-"))).toHaveLength(0);
+
+    // B has the latest version
+    expect(readFile(dirB, "02_Tracker/Daily/today.md")).toBe("morning notes\nafternoon notes\nevening notes");
+  }, 30_000);
 });
