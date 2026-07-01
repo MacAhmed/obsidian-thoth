@@ -156,8 +156,30 @@ export class SyncEngineV2 {
     const unmatchedLocal = new Set(localHashes.keys());
     const unmatchedRemote = new Set(remoteState.keys());
 
+    // Pass 0: honour existing registry — if we already have a UUID for a local path,
+    // adopt that UUID for the remote entry at the same path. This prevents reconcile
+    // from creating duplicate UUIDs for files that are already tracked.
+    const existingByPath = new Map<string, string>(); // path → fileId already in registry
+    for (const [fileId, entry] of Object.entries(this.state.registry)) {
+      existingByPath.set(entry.path, fileId);
+    }
+    for (const [fileId, remote] of remoteState) {
+      const existingId = existingByPath.get(remote.path);
+      if (existingId && existingId !== fileId) {
+        // Registry already tracks this path under a different UUID — use existing
+        const localHash = localHashes.get(remote.path);
+        if (localHash) {
+          this.state.registry[existingId] = { path: remote.path, hash: localHash };
+          this.knownHashes.add(localHash);
+          unmatchedLocal.delete(remote.path);
+          unmatchedRemote.delete(fileId);
+        }
+      }
+    }
+
     // Pass 1: match by hash AND path
     for (const [fileId, remote] of remoteState) {
+      if (!unmatchedRemote.has(fileId)) continue;
       const localHash = localHashes.get(remote.path);
       if (localHash === remote.hash) {
         this.state.registry[fileId] = { path: remote.path, hash: remote.hash };

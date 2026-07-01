@@ -17,6 +17,7 @@ const EXCLUDED_PATHS = [
 function shouldSync(path: string): boolean {
   if (EXCLUDED_PATHS.includes(path)) return false;
   if (path.startsWith("_thoth")) return false;
+  if (path.includes(".conflict-")) return false;
   return true;
 }
 
