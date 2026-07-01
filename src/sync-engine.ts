@@ -122,12 +122,15 @@ export class SyncEngineV2 {
     }
 
     // Build remote state from checkpoint + ops
+    // Also track checkpoint hash per fileId — used to detect stale-pull vs real edit
     const checkpoint = await this.opStorage.readCheckpoint();
-    const remoteState = new Map<string, { path: string; hash: string }>();  // fileId → entry
+    const remoteState = new Map<string, { path: string; hash: string }>();
+    const checkpointHash = new Map<string, string>(); // fileId → hash at checkpoint time
 
     if (checkpoint) {
       for (const [fileId, entry] of Object.entries(checkpoint.files)) {
         remoteState.set(fileId, { path: entry.path, hash: entry.hash });
+        checkpointHash.set(fileId, entry.hash);
       }
       const ops = await this.opStorage.readOpsAfter(checkpoint.seq);
       for (const op of ops) {
@@ -139,7 +142,6 @@ export class SyncEngineV2 {
         }
       }
     } else {
-      // No checkpoint — replay all ops
       const ops = await this.opStorage.readOpsAfter(0);
       for (const op of ops) {
         switch (op.type) {
@@ -202,28 +204,47 @@ export class SyncEngineV2 {
       const conflictingRemoteId = unmatchedRemoteByPath.get(localPath);
 
       if (conflictingRemoteId) {
-        // Same path, different hash → conflict fork
         const remote = remoteState.get(conflictingRemoteId)!;
-        const blob = await this.opStorage.getBlob(remote.hash);
-        if (blob) {
-          const cp = this.conflictPath(localPath, "remote");
-          await this.vault.ensureFolder(cp);
-          await this.vault.createBinary(cp, blob);
+        const cpHash = checkpointHash.get(conflictingRemoteId);
+
+        if (localHash === cpHash) {
+          // Local has the checkpoint version — remote has since been updated.
+          // This is a stale pull, not a real local edit. Overwrite with current remote.
+          const blob = await this.opStorage.getBlob(remote.hash);
+          if (blob) {
+            if (this.vault.exists(localPath)) {
+              await this.vault.modifyBinary(localPath, blob);
+            } else {
+              await this.vault.ensureFolder(localPath);
+              await this.vault.createBinary(localPath, blob);
+            }
+          }
+          this.state.registry[conflictingRemoteId] = { path: localPath, hash: remote.hash };
+          this.knownHashes.add(remote.hash);
+          unmatchedRemote.delete(conflictingRemoteId);
+          unmatchedRemoteByPath.delete(localPath);
+        } else {
+          // Local hash differs from both checkpoint and current remote — genuine local edit → fork
+          const blob = await this.opStorage.getBlob(remote.hash);
+          if (blob) {
+            const cp = this.conflictPath(localPath, "remote");
+            await this.vault.ensureFolder(cp);
+            await this.vault.createBinary(cp, blob);
+          }
+          const content = await this.vault.readBinary(localPath);
+          if (!content) continue;
+          const newId = crypto.randomUUID();
+          this.state.registry[newId] = { path: localPath, hash: localHash };
+          this.knownHashes.add(localHash);
+          const file = localFiles.find(f => f.path === localPath);
+          this.state.outbox.push({
+            seq: 0, device: this.deviceId, ts: Date.now(),
+            type: "create", fileId: newId, path: localPath,
+            hash: localHash, size: file?.stat.size ?? content.byteLength,
+          } as CreateOp);
+          unmatchedRemote.delete(conflictingRemoteId);
+          unmatchedRemoteByPath.delete(localPath);
         }
-        // Local keeps its path, gets fresh UUID, will be pushed
-        const content = await this.vault.readBinary(localPath);
-        if (!content) continue;
-        const newId = crypto.randomUUID();
-        this.state.registry[newId] = { path: localPath, hash: localHash };
-        this.knownHashes.add(localHash);
-        const file = localFiles.find(f => f.path === localPath);
-        this.state.outbox.push({
-          seq: 0, device: this.deviceId, ts: Date.now(),
-          type: "create", fileId: newId, path: localPath,
-          hash: localHash, size: file?.stat.size ?? content.byteLength,
-        } as CreateOp);
-        unmatchedRemote.delete(conflictingRemoteId);
-        unmatchedRemoteByPath.delete(localPath);
       } else {
         // Genuinely new local file — assign UUID, queue create op
         const content = await this.vault.readBinary(localPath);
